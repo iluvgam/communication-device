@@ -1,0 +1,12 @@
+PASS: Create password-protected room
+PASS: Duplicate room rejected
+PASS: Wrong password rejected
+PASS: Unknown room rejected
+PASS: Short password rejected
+PASS: Join room case-insensitively with correct password
+PASS: Unicode broadcast and server-assigned sender name
+PASS: Bidirectional messaging
+PASS: Oversized chat message rejected
+PASS: Creator disconnect closes participants
+PASS: Closed room can be recreated without previous history
+PASS: Production client enforces HTTPS and secure WebSockets

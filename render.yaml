@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: friendschat-relay
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:10000

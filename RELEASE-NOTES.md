@@ -1,10 +1,9 @@
-# Friends Chat v0.1.0-test
+# Friends Chat 0.3
 
-Download **FriendsChat-Test-Download-Windows-x64.zip** below, extract it, and open **FriendsChat.exe** on each Windows x64 laptop. No separate .NET installation is needed.
+Room names and passwords replace long invitation codes. Connections now go outward through a shared HTTPS relay. No local incoming port, local IP entry, discovery or self-signed chat certificate is needed.
 
-Includes Host Chat / Join Chat, display names, connection status, message history, and sending messages. Connections use TLS and require a host fingerprint comparison. The host can read messages. History stays in memory and clears when disconnected.
+Deploy the included relay first, then enter its HTTPS address on both laptops. Creator: choose a room name and password, Create room. Friend: same details, Join room.
 
-Both laptops must be on a network that permits local client traffic. Follow the included Testing-guide.md for iPhone-hotspot setup and Windows Firewall limitations. No security settings are changed automatically.
+The relay can read messages. Memory-only rooms end when the creator disconnects or the relay restarts. Norton and other protections remain enabled; outbound HTTPS/WebSockets may still be inspected or blocked by policy.
 
-Local protocol tests passed, and the visible hosting/sending/stopping controls were exercised. Actual two-laptop hotspot testing is still required. This is an unsigned prototype for permitted devices.
-
+Download FriendsChat-0.3-Windows-x64.zip below. Read START-HERE.txt. A working hosted relay is required; the ZIP does not provide a running public server. Twelve local protocol tests passed; public deployment and two-laptop testing remain necessary.
