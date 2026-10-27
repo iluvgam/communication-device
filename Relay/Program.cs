@@ -13,8 +13,8 @@ builder.Services.AddRateLimiter(o=>{o.RejectionStatusCode=429;o.AddPolicy("conne
 var app=builder.Build();var rooms=new ConcurrentDictionary<string,ChatRoom>();using var authSlots=new SemaphoreSlim(2);int connections=0;
 // A ping without a pong reply within 20 s ends the connection, so dropped clients leave promptly.
 app.UseRateLimiter();app.UseWebSockets(new WebSocketOptions{KeepAliveInterval=TimeSpan.FromSeconds(20),KeepAliveTimeout=TimeSpan.FromSeconds(20)});
-app.MapGet("/",()=>Results.Text("3DFx relay 0.4 is running. Use this HTTPS address in 3DFx.exe. Rooms and messages are temporary."));
-app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.4"}));
+app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.6 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
+app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.6"}));
 app.Map("/chat",async context=>{
  if(!context.WebSockets.IsWebSocketRequest){context.Response.StatusCode=400;return;}
  if(Interlocked.Increment(ref connections)>128){Interlocked.Decrement(ref connections);context.Response.StatusCode=503;return;}
@@ -44,11 +44,17 @@ app.Map("/chat",async context=>{
   if(!await room.Join(peer)){await Reject("Room is closed or full.");return;}
   joined=true;
   await room.Announce(peer.Name+" joined.");
-  var last=DateTime.UtcNow;int count=0;
+  var last=DateTime.UtcNow;int count=0,packets=0;DateTime lastTyping=DateTime.MinValue,lastNudge=DateTime.MinValue;
   while(socket.State==WebSocketState.Open){
    var p=await Protocol.Read(socket,context.RequestAborted);if(p==null)break;
+   if((DateTime.UtcNow-last).TotalSeconds>=10){last=DateTime.UtcNow;count=packets=0;}
+   // Any packet kind counts here, so typing/nudge floods cannot bypass the message limits.
+   if(++packets>200){await Reject("Too many messages. Disconnected.");break;}
+   // Typing: forwarded to the others at most once per 2 s per person; extras are dropped quietly.
+   if(p.Kind=="typing"){if((DateTime.UtcNow-lastTyping).TotalSeconds>=2){lastTyping=DateTime.UtcNow;await room.Broadcast(new Packet("typing",Name:peer.Name),except:peer);}continue;}
+   // Nudge: shakes the others' windows; one per 15 s per person.
+   if(p.Kind=="nudge"){if((DateTime.UtcNow-lastNudge).TotalSeconds<15){await peer.Send(new Packet("error",Text:"Wait a moment before nudging again."));continue;}lastNudge=DateTime.UtcNow;await room.Broadcast(new Packet("nudge",Name:peer.Name),except:peer);continue;}
    if(p.Kind!="send"||string.IsNullOrWhiteSpace(p.Text)||p.Text.Length>2000)throw new IOException("Invalid message.");
-   if((DateTime.UtcNow-last).TotalSeconds>=10){last=DateTime.UtcNow;count=0;}
    // Over 30 per 10 s: drop the message but stay connected (a creator pasting lines must not close the room). Over 90: disconnect.
    if(++count>90){await Reject("Too many messages. Disconnected.");break;}
    if(count>30){await peer.Send(new Packet("error",Text:"Slow down. Message not sent."));continue;}
@@ -78,10 +84,12 @@ sealed class ChatRoom{
  byte[] Derive(string p)=>Rfc2898DeriveBytes.Pbkdf2(p,salt,600000,HashAlgorithmName.SHA256,32);
  public bool CheckPassword(string p){var candidate=Derive(p);try{return CryptographicOperations.FixedTimeEquals(hash,candidate);}finally{CryptographicOperations.ZeroMemory(candidate);}}
  // Holds the broadcast lock so no room message can reach the peer before "ready".
- public async Task<bool> Join(Peer p){await broadcast.WaitAsync();try{lock(sync){if(closed||peers.Count>=16||peers.Contains(p))return false;peers.Add(p);}try{await p.Send(new Packet("ready"));}catch{Remove(p);throw;}return true;}finally{broadcast.Release();}}
+ public async Task<bool> Join(Peer p){await broadcast.WaitAsync();try{lock(sync){if(closed||peers.Count>=16||peers.Contains(p))return false;peers.Add(p);}try{await p.Send(new Packet("ready",Text:Features));}catch{Remove(p);throw;}return true;}finally{broadcast.Release();}}
  // Returns true when this left the room empty; an empty room is closed for good so a late joiner cannot revive it.
  public bool Remove(Peer p){lock(sync){peers.Remove(p);if(peers.Count==0)closed=true;return closed;}}
  // Room notice followed by the current member list (names in join order, one per line).
  public async Task Announce(string text){await Broadcast(new Packet("message",Name:"Room",Text:text));string names;lock(sync)names=string.Join('\n',peers.Select(x=>x.Name));await Broadcast(new Packet("members",Text:names));}
- public async Task Broadcast(Packet p){await broadcast.WaitAsync();try{Peer[] list;lock(sync)list=peers.ToArray();foreach(var peer in list){try{await peer.Send(p);}catch{Remove(peer);peer.Abort();}}}finally{broadcast.Release();}}
+ // Optional extras this relay supports, sent in "ready" so clients only use what is there (0.4 clients ignore it).
+ public const string Features="nudge typing";
+ public async Task Broadcast(Packet p,Peer? except=null){await broadcast.WaitAsync();try{Peer[] list;lock(sync)list=peers.ToArray();foreach(var peer in list){if(peer==except)continue;try{await peer.Send(p);}catch{Remove(peer);peer.Abort();}}}finally{broadcast.Release();}}
 }
