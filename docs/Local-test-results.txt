@@ -1,0 +1,8 @@
+PASS: Two TLS clients receive authenticated sender and Unicode message
+PASS: Bidirectional messaging
+PASS: Wrong host fingerprint rejected before room authentication
+PASS: Wrong room code rejected
+PASS: Missing fingerprint rejected
+PASS: Remaining room works after participant disconnect and new join
+PASS: Stopping host closes participant connection
+PASS: New room rotates code and certificate
