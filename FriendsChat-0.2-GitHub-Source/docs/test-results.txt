@@ -1,0 +1,7 @@
+PASS: Invitation preserves address, code and fingerprint
+PASS: Malformed and loopback invitations rejected
+PASS: UDP loopback discovery finds room and fingerprint
+PASS: Discovery stops when host is disposed
+PASS: Connection check rejects a port in place of IPv4
+PASS: Host sends and receives locally without network loopback
+PASS: Host message length limit enforced
