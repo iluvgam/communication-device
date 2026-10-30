@@ -1,10 +1,99 @@
+using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 namespace FriendsChat;
-// Id/Seq/Total/Data are only used by media packets; older relays and clients ignore unknown fields.
-public record Packet(string Kind,string Room="",string Password="",string Name="",string Text="",string Id="",int Seq=0,long Total=0,string Data="");
+// Id/Seq/Total/Data are only used by media packets, Token only by create/join and the DM hello, Type/Time only by DMs.
+// Older relays and clients ignore unknown fields.
+public record Packet(string Kind,string Room="",string Password="",string Name="",string Text="",string Id="",int Seq=0,long Total=0,string Data="",string Token="",string Type="",long Time=0);
+// One row of your contact list. State: contact, incoming (they asked you), outgoing (you asked them) or blocked.
+// Online, Presence (online/away/busy/offline), Mood (status line) and Avatar (picture id) are only filled in for accepted contacts.
+// Bot marks an AI member (Bryan), so apps can label it.
+public sealed record ContactInfo(string Name,string State,bool Online,string Presence="",string Mood="",string Avatar="",bool Bot=false){
+ public static List<ContactInfo> Parse(string json){try{return JsonSerializer.Deserialize<List<ContactInfo>>(json)??[];}catch(JsonException){return [];}}
+}
+// Accounts live on the relay: unique username, password (same rules as room passwords) and a one-time recovery key.
+public static class Accounts {
+ public const string UsernameRule="Username: 3–20 letters, numbers, - or _.",GuestSuffix=" (guest)";
+ public static bool ValidUsername(string? s)=>s!=null&&s.Length>=3&&s.Length<=20&&s.All(c=>char.IsAsciiLetterOrDigit(c)||c is '-' or '_');
+ // Recovery keys: 20 characters from a 32-letter alphabet without look-alikes (100 random bits), shown as ABCDE-FGHJK-MNPQR-STVWX.
+ const string Alphabet="0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+ public static string NewRecoveryKey(){var b=RandomNumberGenerator.GetBytes(20);var c=b.Select(x=>Alphabet[x&31]).ToArray();return $"{new string(c,0,5)}-{new string(c,5,5)}-{new string(c,10,5)}-{new string(c,15,5)}";}
+ // Typing slips are forgiven: case, spaces and dashes are ignored, and O/I/L read as 0/1/1.
+ public static string NormalizeRecoveryKey(string? key)=>new((key??"").ToUpperInvariant().Where(c=>c is not ('-' or ' ')).Select(c=>c switch{'O'=>'0','I' or 'L'=>'1',_=>c}).ToArray());
+ public static bool ValidRecoveryKey(string? key){var k=NormalizeRecoveryKey(key);return k.Length==20&&k.All(Alphabet.Contains);}
+}
+public sealed record AccountReply(string Username="",string Token="",string RecoveryKey="",string Error="");
+public sealed class AccountException(string message,int status):IOException(message){public int Status{get;}=status;}
+// Profiles: chosen presence, a short status line and a small picture (JPEG or PNG, one packet).
+// "invisible" (Appear offline) shows you as offline to contacts while you stay connected.
+public static class Profiles {
+ public const int MaxMood=80,MaxAvatar=9216;
+ public static readonly string[] Presences=["online","away","busy","invisible"];
+ public static bool ValidMood(string? s)=>s!=null&&s.Length<=MaxMood&&!s.Any(char.IsControl);
+ public static bool ValidAvatar(byte[] b)=>b.Length is >0 and <=MaxAvatar&&(b is [0xFF,0xD8,..]||b is [0x89,0x50,0x4E,0x47,..]);
+ public static string Label(string presence)=>presence switch{"online"=>"Online","away"=>"Away","busy"=>"Busy","invisible"=>"Appear offline",_=>"Offline"};
+}
+// The signed-in "online" connection: contacts, presence and direct messages (DMs).
+// DMs to offline contacts are held on the relay until one of the recipient's apps confirms it saved them (Ack).
+public sealed class DirectClient:IDisposable {
+ readonly ClientWebSocket socket=new(){Options={KeepAliveInterval=TimeSpan.FromSeconds(15),KeepAliveTimeout=TimeSpan.FromSeconds(15)}};readonly SemaphoreSlim send=new(1);readonly CancellationTokenSource stop=new();
+ public static Uri UrlFor(string relayUrl)=>new UriBuilder(RelayClient.ValidateUrl(relayUrl)){Path="/dm"}.Uri;
+ public async Task Connect(Uri url,string token){
+  using var timeout=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);timeout.CancelAfter(TimeSpan.FromSeconds(60));
+  await socket.ConnectAsync(url,timeout.Token);await Protocol.Write(socket,new Packet("hello",Token:token),timeout.Token);
+  var reply=await Protocol.Read(socket,timeout.Token);if(reply?.Kind!="ready")throw new IOException(reply?.Text??"Relay disconnected.");}
+ public Task<Packet?> Read()=>Protocol.Read(socket,stop.Token);
+ public Task Contact(string action,string username)=>Write(new Packet("contact-"+action,Name:username));
+ public async Task<string> SendText(string to,string text){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:"text"));return id;}
+ public async Task<string> SendSticker(string to,string sticker){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:sticker,Id:id,Type:"sticker"));return id;}
+ // Pictures only (up to 5 MB), in the same pieces as room media; each piece takes the send lock on its own.
+ public async Task<string> SendPicture(string to,byte[] data,string mime,IProgress<int>? progress=null){
+  if(!Media.IsImage(mime)||data.Length==0||data.Length>Media.MaxImage)throw new IOException("Pictures can be up to 5 MB.");
+  var id=Media.NewId();await Write(new Packet("dm-picture",Name:to,Text:mime,Id:id,Total:data.Length));
+  for(int seq=0,offset=0;offset<data.Length;seq++,offset+=Media.ChunkBytes){
+   await Write(new Packet("dm-chunk",Id:id,Seq:seq,Data:Convert.ToBase64String(data,offset,Math.Min(Media.ChunkBytes,data.Length-offset))));
+   progress?.Report((int)(100L*Math.Min(data.Length,offset+Media.ChunkBytes)/data.Length));}
+  await Write(new Packet("dm-end",Id:id));return id;}
+ public Task Ack(string id)=>Write(new Packet("dm-ack",Id:id));
+ // Profile and receipts. Typing and Seen go only to accepted contacts, and only live (never stored).
+ public Task SetProfile(string presence,string mood)=>Write(new Packet("profile",Type:presence,Text:mood));
+ public Task SetAvatar(byte[]? picture)=>Write(new Packet("avatar",Data:picture==null?"":Convert.ToBase64String(picture)));
+ public Task GetAvatar(string username)=>Write(new Packet("avatar-get",Name:username));
+ public Task Typing(string to)=>Write(new Packet("dm-typing",Name:to));
+ public Task Seen(string from,string lastId)=>Write(new Packet("dm-seen",Name:from,Id:lastId));
+ async Task Write(Packet p){await send.WaitAsync(stop.Token);try{await Protocol.Write(socket,p,stop.Token);}finally{send.Release();}}
+ public async Task Close(){try{using var t=new CancellationTokenSource(TimeSpan.FromSeconds(1.5));if(socket.State==WebSocketState.Open)await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure,null,t.Token).ConfigureAwait(false);}catch(Exception e) when(e is WebSocketException or OperationCanceledException or ObjectDisposedException){}finally{Dispose();}}
+ public void Dispose(){stop.Cancel();socket.Abort();socket.Dispose();}
+}
+// Talks to the relay's /account endpoints. Production use goes through ForRelay, which only accepts the relay's HTTPS address.
+public sealed class AccountClient:IDisposable {
+ readonly HttpClient http;
+ internal AccountClient(Uri baseAddress){http=new HttpClient{BaseAddress=baseAddress,Timeout=TimeSpan.FromSeconds(90)};}
+ public static AccountClient ForRelay(string relayUrl)=>new(new UriBuilder(RelayClient.ValidateUrl(relayUrl)){Scheme="https",Path="/"}.Uri);
+ public Task<AccountReply> SignUp(string username,string password)=>Post("account/signup",new{username,password});
+ public Task<AccountReply> SignIn(string username,string password)=>Post("account/signin",new{username,password});
+ public Task<AccountReply> Recover(string username,string recoveryKey,string newPassword)=>Post("account/recover",new{username,recoveryKey,newPassword});
+ public Task<AccountReply> Me(string token)=>Post("account/me",new{},token);
+ public Task<AccountReply> SignOut(string token)=>Post("account/signout",new{},token);
+ public Task<AccountReply> ChangePassword(string token,string password,string newPassword)=>Post("account/password",new{password,newPassword},token);
+ public Task<AccountReply> NewRecoveryKey(string token,string password)=>Post("account/recovery-key",new{password},token);
+ public Task<AccountReply> Delete(string token,string password)=>Post("account/delete",new{password},token);
+ // For the operator's bot service only: signs in a reserved bot account with the relay's BotKey (creating it the first time).
+ public Task<AccountReply> BotSignIn(string username,string botKey)=>Post("account/bot",new{username,password=botKey});
+ async Task<AccountReply> Post(string path,object body,string? token=null){
+  using var request=new HttpRequestMessage(HttpMethod.Post,path){Content=JsonContent.Create(body)};
+  if(token!=null)request.Headers.Authorization=new("Bearer",token);
+  HttpResponseMessage response;
+  try{response=await http.SendAsync(request);}catch(Exception e) when(e is HttpRequestException or TaskCanceledException){throw new AccountException("Could not reach the relay. Check its address and your internet.",0);}
+  using(response){
+   AccountReply? reply=null;try{reply=await response.Content.ReadFromJsonAsync<AccountReply>();}catch(Exception e) when(e is JsonException or NotSupportedException or InvalidOperationException){}
+   if(response.IsSuccessStatusCode&&reply!=null)return reply;
+   var status=(int)response.StatusCode;
+   throw new AccountException(reply is {Error.Length:>0}?reply.Error:status==429?"Too many tries. Wait a minute and try again.":status==404?"This relay does not support accounts yet.":$"The relay could not do that (error {status}).",status);}}
+ public void Dispose()=>http.Dispose();
+}
 // Images and videos travel as media-start, numbered media-chunk packets (base64, under the 16 KiB packet limit), then media-end.
 // The relay checks and forwards each piece to the others; it never stores media.
 public static class Media {
@@ -50,10 +139,11 @@ public static class Protocol {
  public static Task Write(WebSocket socket,Packet p,CancellationToken ct)=>socket.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(p)),WebSocketMessageType.Text,true,ct);
 }
 // Saved only when the user ticks "Remember". There is deliberately no password field.
-public record Settings(string Relay="",string Name="",bool Sound=true,bool StartupSound=true){
+// Account/Session: who stays signed in. Session is the sign-in token encrypted with Windows (DPAPI) for this Windows user only.
+public record Settings(string Relay="",string Name="",bool Sound=true,bool StartupSound=true,string Account="",string Session="",bool ReadReceipts=true){
  public static readonly Settings Empty=new();
  public static string DefaultPath=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"3DFx","settings.json");
- public static Settings Load(string path){try{var s=JsonSerializer.Deserialize<Settings>(File.ReadAllText(path));return s==null||s.Relay==null||s.Name==null||s.Relay.Length>300||s.Name.Length>32?Empty:s;}catch(Exception e) when(e is IOException or JsonException or UnauthorizedAccessException){return Empty;}}
+ public static Settings Load(string path){try{var s=JsonSerializer.Deserialize<Settings>(File.ReadAllText(path));return s==null||s.Relay==null||s.Name==null||s.Account==null||s.Session==null||s.Relay.Length>300||s.Name.Length>32?Empty:s;}catch(Exception e) when(e is IOException or JsonException or UnauthorizedAccessException){return Empty;}}
  public void Save(string path){Directory.CreateDirectory(Path.GetDirectoryName(path)!);File.WriteAllText(path,JsonSerializer.Serialize(this));}
 }
 public sealed class RelayClient:IDisposable {
@@ -63,11 +153,12 @@ public sealed class RelayClient:IDisposable {
  public static Uri ValidateUrl(string value){var v=value.Trim();if(v.Length>0&&!v.Contains("://"))v="https://"+v;
   if(!Uri.TryCreate(v,UriKind.Absolute,out var u)||u.Scheme!="https"||!u.Host.Contains('.')||!string.IsNullOrEmpty(u.UserInfo)||!string.IsNullOrEmpty(u.Query)||!string.IsNullOrEmpty(u.Fragment)||u.AbsolutePath.TrimEnd('/') is not (""or"/chat"or"/health"))throw new IOException("Relay address: use https://your-relay.onrender.com");
   return new UriBuilder(u){Scheme="wss",Path="/chat"}.Uri;}
- public async Task Connect(string url,bool create,string room,string password,string name){
+ // With a session token the relay uses the account's username; without one you join as a guest.
+ public async Task Connect(string url,bool create,string room,string password,string name,string? token=null){
   var (field,problem)=Protocol.Check(url,name,room,password);if(field!=Field.None)throw new IOException(problem);
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);timeout.CancelAfter(TimeSpan.FromSeconds(90));
   await socket.ConnectAsync(ValidateUrl(url),timeout.Token);
-  await Protocol.Write(socket,new Packet(create?"create":"join",Protocol.NormalizeRoom(room).ToLowerInvariant(),password,name.Trim()),timeout.Token);
+  await Protocol.Write(socket,new Packet(create?"create":"join",Protocol.NormalizeRoom(room).ToLowerInvariant(),password,name.Trim(),Token:token??""),timeout.Token);
   var reply=await Protocol.Read(socket,timeout.Token);if(reply?.Kind!="ready")throw new IOException(reply?.Text??"Relay disconnected.");
   Features=reply.Text.Split(' ',StringSplitOptions.RemoveEmptyEntries);
  }
