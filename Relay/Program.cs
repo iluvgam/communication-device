@@ -4,17 +4,30 @@ using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using FriendsChat;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Data.Sqlite;
 
 var builder=WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=16384);
 // Default 20 per IP per minute; local tests raise it with --ConnectionsPerMinute=500.
 int perMinute=builder.Configuration.GetValue("ConnectionsPerMinute",20);
-builder.Services.AddRateLimiter(o=>{o.RejectionStatusCode=429;o.AddPolicy("connections",ctx=>RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new FixedWindowRateLimiterOptions{PermitLimit=perMinute,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));});
+int accountsPerMinute=builder.Configuration.GetValue("AccountsPerMinute",20);
+builder.Services.AddRateLimiter(o=>{o.RejectionStatusCode=429;
+ o.AddPolicy("connections",ctx=>RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new FixedWindowRateLimiterOptions{PermitLimit=perMinute,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
+ o.AddPolicy("accounts",ctx=>RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new FixedWindowRateLimiterOptions{PermitLimit=accountsPerMinute,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));});
 var app=builder.Build();var rooms=new ConcurrentDictionary<string,ChatRoom>();using var authSlots=new SemaphoreSlim(2);int connections=0;
+// Accounts are on when AccountsDb is set, or when a Render disk is mounted at /var/data. Messages are still never stored.
+AccountStore? accounts=null;DirectHub? direct=null;var accountsState="off";
+// AI members: reserved names (default "bryan"); summoning and bot sign-in only work when BotKey is set.
+var bots=new Bots((builder.Configuration["Bots"]??"bryan").Split(','),builder.Configuration["BotKey"]);
+var accountsPath=builder.Configuration["AccountsDb"]??(Directory.Exists("/var/data")?"/var/data/accounts.db":null);
+// Direct messages need accounts: contacts and held DMs live in the same database file.
+if(accountsPath!=null)try{accounts=new AccountStore(accountsPath);direct=new DirectHub(accounts,new DirectStore(accounts),bots);accountsState="on";ChatRoom.Features+=" accounts direct profiles receipts"+(bots.On?" bots":"");
+ AccountApi.Map(app,accounts,authSlots,direct,bots);app.Map("/dm",direct.Handle).RequireRateLimiting("connections");}
+ catch(Exception e) when(e is SqliteException or IOException or UnauthorizedAccessException){accountsState="error";app.Logger.LogError("Accounts are off: cannot use {Path}: {Message}",accountsPath,e.Message);}
 // A ping without a pong reply within 20 s ends the connection, so dropped clients leave promptly.
 app.UseRateLimiter();app.UseWebSockets(new WebSocketOptions{KeepAliveInterval=TimeSpan.FromSeconds(20),KeepAliveTimeout=TimeSpan.FromSeconds(20)});
-app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.7 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
-app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.7"}));
+app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.11 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
+app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.11",accounts=accountsState,bots=bots.On&&accounts!=null?"on":"off"}));
 app.Map("/chat",async context=>{
  if(!context.WebSockets.IsWebSocketRequest){context.Response.StatusCode=400;return;}
  if(Interlocked.Increment(ref connections)>128){Interlocked.Decrement(ref connections);context.Response.StatusCode=503;return;}
@@ -25,9 +38,19 @@ app.Map("/chat",async context=>{
   async Task Reject(string reason){await peer.Close(reason);await Peer.Drain(socket);}
   using var authTimeout=CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);authTimeout.CancelAfter(TimeSpan.FromSeconds(30));
   var hello=await Protocol.Read(socket,authTimeout.Token);if(hello==null)return;
+  // A summoned bot (see Bots): signed in as a bot account, with the one-time pass for this room in Data. No room password.
+  if(hello.Kind=="summoned"){
+   if(!bots.On||hello.Token is not {Length:>0}||accounts?.Session(hello.Token) is not {} bot||!bots.IsBot(bot.Username)||!Protocol.ValidRoom(hello.Room)||!bots.UsePass(hello.Data,hello.Room.ToLowerInvariant(),bot.Username)){await Reject("That invitation has expired.");return;}
+   key=hello.Room.ToLowerInvariant();peer.Name=Bots.Display(bot.Username);
+   if(!rooms.TryGetValue(key,out room)){await Reject("Room is closed.");return;}
+  }else{
   var problem=hello.Kind is not ("create" or "join")?"Unsupported request.":!Protocol.ValidRoom(hello.Room)?Protocol.RoomRule:!Protocol.ValidName(hello.Name)?Protocol.NameRule:!Protocol.ValidPassword(hello.Password)?Protocol.PasswordRule:null;
   if(problem!=null){await Reject(problem);return;}
-  key=hello.Room.ToLowerInvariant();peer.Name=hello.Name.Trim();
+  key=hello.Room.ToLowerInvariant();
+  // Signed in: the account's username. Otherwise a guest, marked as one once accounts exist, so nobody can pose as an account holder.
+  // A bad or expired sign-in is refused rather than quietly turned into a guest.
+  if(hello.Token is {Length:>0}){if(accounts?.Session(hello.Token) is not {} who){await Reject("Your sign-in has expired. Sign in again.");return;}peer.Name=bots.IsBot(who.Username)?Bots.Display(who.Username):who.Username;}
+  else peer.Name=hello.Name.Trim()+(accounts!=null?Accounts.GuestSuffix:"");
   string? denied=null;
   await authSlots.WaitAsync(authTimeout.Token);
   try{
@@ -40,6 +63,7 @@ app.Map("/chat",async context=>{
   }finally{authSlots.Release();}
   // Rejected outside the password-check slots so a slow close cannot hold one.
   if(denied!=null||room==null){await Reject(denied??"Room is closed.");return;}
+  }
   // Join sends "ready" only once the peer is in the room, so a full or closing room never says ready first.
   if(!await room.Join(peer)){await Reject("Room is closed or full.");return;}
   joined=true;
@@ -76,6 +100,11 @@ app.Map("/chat",async context=>{
    if(++count>90){await Reject("Too many messages. Disconnected.");break;}
    if(count>30){await peer.Send(new Packet("error",Text:"Slow down. Message not sent."));continue;}
    await room.Broadcast(new Packet(sticker?"sticker":"message",Name:peer.Name,Text:p.Text));
+   // "@bryan": the bot gets a one-time pass for this room and the message that called it. Offline? Only the caller is told.
+   if(!sticker&&direct!=null&&bots.Mentioned(p.Text) is {} called&&!room.Has(Bots.Display(called))&&!bots.Recently(key,called)){
+    var pass=bots.NewPass(key,called);
+    if(!await direct.PushToUser(called,new Packet("summon",Room:key,Token:pass,Name:peer.Name,Text:p.Text)))
+     await peer.Send(new Packet("message",Name:"Room",Text:$"{Bots.Display(called)} isn't online right now."));}
   }
  }catch(Exception e) when(e is IOException or WebSocketException or OperationCanceledException or System.Text.Json.JsonException or ObjectDisposedException){}
  finally{
@@ -103,12 +132,13 @@ sealed class ChatRoom{
  byte[] Derive(string p)=>Rfc2898DeriveBytes.Pbkdf2(p,salt,600000,HashAlgorithmName.SHA256,32);
  public bool CheckPassword(string p){var candidate=Derive(p);try{return CryptographicOperations.FixedTimeEquals(hash,candidate);}finally{CryptographicOperations.ZeroMemory(candidate);}}
  // Holds the broadcast lock so no room message can reach the peer before "ready".
+ public bool Has(string name){lock(sync)return peers.Any(p=>p.Name==name);}
  public async Task<bool> Join(Peer p){await broadcast.WaitAsync();try{lock(sync){if(closed||peers.Count>=16||peers.Contains(p))return false;peers.Add(p);}try{await p.Send(new Packet("ready",Text:Features));}catch{Remove(p);throw;}return true;}finally{broadcast.Release();}}
  // Returns true when this left the room empty; an empty room is closed for good so a late joiner cannot revive it.
  public bool Remove(Peer p){lock(sync){peers.Remove(p);if(peers.Count==0)closed=true;return closed;}}
  // Room notice followed by the current member list (names in join order, one per line).
  public async Task Announce(string text){await Broadcast(new Packet("message",Name:"Room",Text:text));string names;lock(sync)names=string.Join('\n',peers.Select(x=>x.Name));await Broadcast(new Packet("members",Text:names));}
  // Optional extras this relay supports, sent in "ready" so clients only use what is there (0.4 clients ignore it).
- public const string Features="nudge typing media stickers";
+ public static string Features="nudge typing media stickers";
  public async Task Broadcast(Packet p,Peer? except=null){await broadcast.WaitAsync();try{Peer[] list;lock(sync)list=peers.ToArray();foreach(var peer in list){if(peer==except)continue;try{await peer.Send(p);}catch{Remove(peer);peer.Abort();}}}finally{broadcast.Release();}}
 }
