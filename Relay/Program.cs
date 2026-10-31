@@ -27,8 +27,8 @@ if(accountsPath!=null)try{accounts=new AccountStore(accountsPath);direct=new Dir
  catch(Exception e) when(e is SqliteException or IOException or UnauthorizedAccessException){accountsState="error";app.Logger.LogError("Accounts are off: cannot use {Path}: {Message}",accountsPath,e.Message);}
 // A ping without a pong reply within 20 s ends the connection, so dropped clients leave promptly.
 app.UseRateLimiter();app.UseWebSockets(new WebSocketOptions{KeepAliveInterval=TimeSpan.FromSeconds(20),KeepAliveTimeout=TimeSpan.FromSeconds(20)});
-app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.14 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
-app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.14",accounts=accountsState,bots=bots.On&&accounts!=null?"on":"off"}));
+app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.15 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
+app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.15",accounts=accountsState,bots=bots.On&&accounts!=null?"on":"off"}));
 app.Map("/chat",async context=>{
  if(!context.WebSockets.IsWebSocketRequest){context.Response.StatusCode=400;return;}
  if(Interlocked.Increment(ref connections)>128){Interlocked.Decrement(ref connections);context.Response.StatusCode=503;return;}

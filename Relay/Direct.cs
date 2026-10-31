@@ -94,7 +94,7 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
    var hello=await Protocol.Read(socket,helloTimeout.Token);
    if(hello?.Kind!="hello"||hello.Token is not {Length:>0}||accounts.Session(hello.Token) is not {} who){await peer.Close("Your sign-in has expired. Sign in again.");await Peer.Drain(socket);return;}
    me=new Device(peer,who.Id,who.Username,hello.Token,(hello.Text??"").Split(' ').Contains("edits"));peer.Name=who.Username;bool first=Add(me);
-   await peer.Send(new Packet("ready",Text:"direct edits"));await peer.Send(MePacket(me.Account));await peer.Send(ContactsPacket(me.Account));
+   await peer.Send(new Packet("ready",Text:bots.On?"direct edits feedback":"direct edits"));await peer.Send(MePacket(me.Account));await peer.Send(ContactsPacket(me.Account));
    if(first)await PushPresence(me.Account);
    store.Expire();await DeliverHeld(me);
    await Loop(me,socket,context.RequestAborted);
@@ -105,6 +105,7 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
  // An older app can't show changes, so they are dropped for it rather than waiting forever.
  async Task DeliverHeld(Device me){foreach(var h in store.Pending(me.Account)){
   if(IsChange(h.Type)&&!me.Edits){store.Ack(me.Account,h.MsgId);continue;}
+  if(h.Type=="feedback"){await me.Peer.Send(FeedbackPacket(h.Sender,h.MsgId,h.Reply,h.Text,h.Created));continue;}
   byte[]? blob=h.Type=="picture"?store.Blob(h.Row):null;if(h.Type=="picture"&&blob==null)continue;
   await SendDm(me.Peer,h.Sender,"in",h.MsgId,h.Type,h.Text,blob,h.Created,h.Reply);}}
  // A DM as packets: one "dm" (for pictures followed by dm-chunk pieces and dm-end). Room says "in" or "out" (sent from your other device).
@@ -112,6 +113,9 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
   await to.Send(new Packet("dm",Room:direction,Name:other,Text:text,Id:id,Type:type,Total:blob?.Length??0,Time:time,Reply:reply));if(blob==null)return;
   for(int seq=0,o=0;o<blob.Length;seq++,o+=Media.ChunkBytes)await to.Send(new Packet("dm-chunk",Id:id,Seq:seq,Data:Convert.ToBase64String(blob,o,Math.Min(Media.ChunkBytes,blob.Length-o))));
   await to.Send(new Packet("dm-end",Id:id));}
+ // Feedback is held as JSON of its own fields (type, text, room, rating) and reaches the bot as a "feedback" packet.
+ sealed record FeedbackFields(string Type,string Text,string Room,int Seq);
+ static Packet FeedbackPacket(string from,string id,string target,string json,long time){var f=JsonSerializer.Deserialize<FeedbackFields>(json)!;return new Packet("feedback",Name:from,Id:id,Reply:target,Type:f.Type,Text:f.Text,Room:f.Room,Seq:f.Seq,Time:time);}
  // Only mutual contacts can message each other.
  (long Id,string Name)? Recipient(Device me,string? name){var a=Accounts.ValidUsername(name)?accounts.Find(name!):null;
   return a!=null&&a.Id!=me.Account&&store.State(me.Account,a.Id)=="contact"&&store.State(a.Id,me.Account)=="contact"?(a.Id,a.Username):null;}
@@ -164,6 +168,16 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
        "edit"=>text&&Media.ValidId(reply),"delete"=>Media.ValidId(reply),"react"=>Reaction.Valid(p.Text)&&Media.ValidId(reply),_=>false})){await Fail(p.Id,"That message can't be sent.");break;}
      if(Recipient(me,p.Name) is not {} to){await Fail(p.Id,"You can only message your contacts.");break;}
      await Deliver(me,to,p.Id,p.Type,p.Type=="delete"?"":p.Text,null,reply);break;
+    // Thumbs up / down and survey answers for an AI member, from anyone signed in. Held like a DM until the bot's service confirms it.
+    case "feedback":
+     if(!Media.ValidId(p.Id))throw new IOException("Invalid message.");
+     if(++messages>30){await Fail(p.Id,"Slow down. Feedback not sent.");break;}
+     if(!Feedback.Valid(p)){await Fail(p.Id,"That feedback can't be sent.");break;}
+     if(!bots.On||!bots.IsBot(p.Name)||accounts.Find(p.Name) is not {} bot){await Fail(p.Id,"Feedback is only for AI members.");break;}
+     var json=JsonSerializer.Serialize(new FeedbackFields(p.Type,p.Text??"",p.Room??"",p.Seq));
+     if(store.Hold(me.Account,bot.Id,p.Id,"feedback",json,null,p.Reply??"") is not {} at){await Fail(p.Id,"Feedback can't be taken right now. Try again later.");break;}
+     await me.Peer.Send(new Packet("dm-sent",Id:p.Id,Time:at));
+     foreach(var d in DevicesOf(bot.Id))await SendTo(d,FeedbackPacket(me.Name,p.Id,p.Reply??"",json,at));break;
     case "dm-picture":
      if((DateTime.UtcNow-mediaWindow).TotalMinutes>=10){mediaWindow=DateTime.UtcNow;mediaBudget=0;}
      if(picture!=null||!Media.ValidId(p.Id)||!Media.IsImage(p.Text)||p.Total<=0||p.Total>Media.MaxImage)throw new IOException("Invalid picture.");
