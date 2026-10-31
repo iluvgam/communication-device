@@ -4,9 +4,18 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 namespace FriendsChat;
-// Id/Seq/Total/Data are only used by media packets, Token only by create/join and the DM hello, Type/Time only by DMs.
-// Older relays and clients ignore unknown fields.
-public record Packet(string Kind,string Room="",string Password="",string Name="",string Text="",string Id="",int Seq=0,long Total=0,string Data="",string Token="",string Type="",long Time=0);
+// Id/Seq/Total/Data are used by media packets, Token only by create/join and the DM hello, Type by DMs and room history.
+// Id and Time also mark each room message (set by the relay); Reply is the id of the message being answered (or changed, in DMs);
+// Edited marks an edited message in room history. Older relays and clients ignore unknown fields.
+public record Packet(string Kind,string Room="",string Password="",string Name="",string Text="",string Id="",int Seq=0,long Total=0,string Data="",string Token="",string Type="",long Time=0,string Reply="",bool Edited=false);
+// Reactions on one message: each emoji (E) with who used it (N), in the order they were first used.
+public sealed record Reaction(string E,List<string> N){
+ public const int MaxKinds=8,MaxTotal=48;
+ // One emoji (flags and skin tones included), not words or spaces.
+ public static bool Valid(string? s)=>s is {Length:>0 and <=16}&&s.All(c=>c>0x7F&&!char.IsWhiteSpace(c)&&!char.IsControl(c)&&!char.IsLetterOrDigit(c));
+ public static string Format(List<Reaction> list)=>JsonSerializer.Serialize(list);
+ public static List<Reaction> Parse(string? json){try{return (JsonSerializer.Deserialize<List<Reaction>>(json??"")??[]).Where(r=>r?.E!=null&&r.N!=null).ToList();}catch(JsonException){return [];}}
+}
 // One row of your contact list. State: contact, incoming (they asked you), outgoing (you asked them) or blocked.
 // Online, Presence (online/away/busy/offline), Mood (status line) and Avatar (picture id) are only filled in for accepted contacts.
 // Bot marks an AI member (Bryan), so apps can label it.
@@ -42,12 +51,17 @@ public sealed class DirectClient:IDisposable {
  public static Uri UrlFor(string relayUrl)=>new UriBuilder(RelayClient.ValidateUrl(relayUrl)){Path="/dm"}.Uri;
  public async Task Connect(Uri url,string token){
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);timeout.CancelAfter(TimeSpan.FromSeconds(60));
-  await socket.ConnectAsync(url,timeout.Token);await Protocol.Write(socket,new Packet("hello",Token:token),timeout.Token);
-  var reply=await Protocol.Read(socket,timeout.Token);if(reply?.Kind!="ready")throw new IOException(reply?.Text??"Relay disconnected.");}
+  // "edits": this app understands replies, edits, deletes and reactions, so the relay may send them.
+  await socket.ConnectAsync(url,timeout.Token);await Protocol.Write(socket,new Packet("hello",Token:token,Text:"edits"),timeout.Token);
+  var reply=await Protocol.Read(socket,timeout.Token);if(reply?.Kind!="ready")throw new IOException(reply?.Text??"Relay disconnected.");Features=reply.Text.Split(' ',StringSplitOptions.RemoveEmptyEntries);}
+ // From the relay's "ready" ("direct", plus "edits" from 0.14).
+ public string[] Features{get;private set;}=[];
  public Task<Packet?> Read()=>Protocol.Read(socket,stop.Token);
  public Task Contact(string action,string username)=>Write(new Packet("contact-"+action,Name:username));
- public async Task<string> SendText(string to,string text){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:"text"));return id;}
- public async Task<string> SendSticker(string to,string sticker){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:sticker,Id:id,Type:"sticker"));return id;}
+ public async Task<string> SendText(string to,string text,string reply=""){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:"text",Reply:reply));return id;}
+ public async Task<string> SendSticker(string to,string sticker,string reply=""){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:sticker,Id:id,Type:"sticker",Reply:reply));return id;}
+ // A change to an earlier DM: "edit" (new text), "delete", or "react" (an emoji; sending it again takes it back). Delivered like a message.
+ public async Task<string> SendChange(string to,string type,string target,string text=""){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:type,Reply:target));return id;}
  // Pictures only (up to 5 MB), in the same pieces as room media; each piece takes the send lock on its own.
  public async Task<string> SendPicture(string to,byte[] data,string mime,IProgress<int>? progress=null){
   if(!Media.IsImage(mime)||data.Length==0||data.Length>Media.MaxImage)throw new IOException("Pictures can be up to 5 MB.");
@@ -157,27 +171,34 @@ public sealed class RelayClient:IDisposable {
  public async Task Connect(string url,bool create,string room,string password,string name,string? token=null){
   var (field,problem)=Protocol.Check(url,name,room,password);if(field!=Field.None)throw new IOException(problem);
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);timeout.CancelAfter(TimeSpan.FromSeconds(90));
-  await socket.ConnectAsync(ValidateUrl(url),timeout.Token);
+  await socket.ConnectAsync(TestEndpoint??ValidateUrl(url),timeout.Token);
   await Protocol.Write(socket,new Packet(create?"create":"join",Protocol.NormalizeRoom(room).ToLowerInvariant(),password,name.Trim(),Token:token??""),timeout.Token);
   var reply=await Protocol.Read(socket,timeout.Token);if(reply?.Kind!="ready")throw new IOException(reply?.Text??"Relay disconnected.");
   Features=reply.Text.Split(' ',StringSplitOptions.RemoveEmptyEntries);
  }
+ // Tests point this at a local ws:// relay; the app always uses the relay's HTTPS address.
+ internal static Uri? TestEndpoint;
  // What the relay supports, from its "ready" reply (e.g. "nudge typing"). A 0.4 relay sends none; never send it packets it would reject.
  public string[] Features{get;private set;}=[];
  public Task<Packet?> Read()=>Protocol.Read(socket,stop.Token);
  public async Task Signal(string kind){if(!Features.Contains(kind))return;await Write(new Packet(kind));}
- public async Task SendSticker(string id){if(Features.Contains("stickers"))await Write(new Packet("sticker",Text:id));}
+ public async Task SendSticker(string id,string reply=""){if(Features.Contains("stickers"))await Write(new Packet("sticker",Text:id,Reply:reply));}
+ // Changes to room messages (by the relay's message id). Only your own can be edited or deleted; reacting again takes it back.
+ public async Task Edit(string id,string text){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");if(Features.Contains("edits"))await Write(new Packet("edit",Id:id,Text:text));}
+ public async Task Delete(string id){if(Features.Contains("edits"))await Write(new Packet("delete",Id:id));}
+ public async Task React(string id,string emoji){if(Features.Contains("reactions"))await Write(new Packet("react",Id:id,Text:emoji));}
  // Sends one image or video in pieces. Each piece takes the send lock on its own, so chat messages can slip in between.
- public async Task SendMedia(byte[] data,string mime,IProgress<int>? progress=null){
+ // Returns its id (others react to it by this id).
+ public async Task<string> SendMedia(byte[] data,string mime,IProgress<int>? progress=null){
   if(!Features.Contains("media"))throw new IOException("This relay does not support pictures and videos yet.");
   if(data.Length==0||data.Length>Media.Limit(mime))throw new IOException(Media.IsVideo(mime)?"Videos can be up to 25 MB.":"Pictures can be up to 5 MB.");
   var id=Media.NewId();await Write(new Packet("media-start",Text:mime,Id:id,Total:data.Length));
   for(int seq=0,offset=0;offset<data.Length;seq++,offset+=Media.ChunkBytes){
    await Write(new Packet("media-chunk",Id:id,Seq:seq,Data:Convert.ToBase64String(data,offset,Math.Min(Media.ChunkBytes,data.Length-offset))));
    progress?.Report((int)(100L*Math.Min(data.Length,offset+Media.ChunkBytes)/data.Length));}
-  await Write(new Packet("media-end",Id:id));}
+  await Write(new Packet("media-end",Id:id));return id;}
  async Task Write(Packet p){await send.WaitAsync(stop.Token);try{await Protocol.Write(socket,p,stop.Token);}finally{send.Release();}}
- public async Task Send(string text){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");await send.WaitAsync(stop.Token);try{await Protocol.Write(socket,new Packet("send",Text:text),stop.Token);}finally{send.Release();}}
+ public async Task Send(string text,string reply=""){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");await send.WaitAsync(stop.Token);try{await Protocol.Write(socket,new Packet("send",Text:text,Reply:Features.Contains("replies")?reply:""),stop.Token);}finally{send.Release();}}
  // Says goodbye with a WebSocket close so the relay sees the leave at once; a bare abort takes ~10 s to pass through Render's proxy.
  public async Task Close(){try{using var t=new CancellationTokenSource(TimeSpan.FromSeconds(1.5));await send.WaitAsync(t.Token).ConfigureAwait(false);try{if(socket.State==WebSocketState.Open)await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure,null,t.Token).ConfigureAwait(false);}finally{send.Release();}
   // Wait (up to the 1.5 s) for the relay's side to end, as seen by the receive loop; aborting right away lets the proxy drop the close.
