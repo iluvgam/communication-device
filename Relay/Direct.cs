@@ -8,14 +8,17 @@ namespace FriendsChat;
 sealed class DirectStore {
  public const int MaxPending=500;public const long MaxPendingBytes=100L*1024*1024;const long KeepMs=30L*86400*1000;
  readonly AccountStore accounts;
- public sealed record Held(long Row,string Sender,string MsgId,string Type,string Text,long Created);
+ public sealed record Held(long Row,string Sender,string MsgId,string Type,string Text,long Created,string Reply);
  public DirectStore(AccountStore accounts){this.accounts=accounts;using var db=Open();AccountStore.Run(db,"""
   CREATE TABLE IF NOT EXISTS contacts(owner INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,other INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,state TEXT NOT NULL,PRIMARY KEY(owner,other));
   CREATE TABLE IF NOT EXISTS dms(id INTEGER PRIMARY KEY,sender INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,recipient INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,msgid TEXT NOT NULL,type TEXT NOT NULL,text TEXT NOT NULL,blob BLOB,created INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS dms_recipient ON dms(recipient,id);
   CREATE INDEX IF NOT EXISTS contacts_other ON contacts(other);
   CREATE TABLE IF NOT EXISTS profiles(account INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,presence TEXT NOT NULL DEFAULT 'online',mood TEXT NOT NULL DEFAULT '',avatar BLOB,avatar_id TEXT NOT NULL DEFAULT '');
-  """);}
+  """);
+  // 0.14: the id a DM answers or changes (replies, edits, deletes, reactions). Added to databases made by older relays.
+  using var columns=AccountStore.Command(db,"SELECT COUNT(*) FROM pragma_table_info('dms') WHERE name='reply'",[]);
+  if(Convert.ToInt64(columns.ExecuteScalar())==0)AccountStore.Run(db,"ALTER TABLE dms ADD COLUMN reply TEXT NOT NULL DEFAULT ''");}
  SqliteConnection Open()=>accounts.Open();
  static long Now=>DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
  void Exec(string sql,params (string,object)[] args){using var db=Open();AccountStore.Run(db,sql,args);}
@@ -38,12 +41,12 @@ sealed class DirectStore {
  // Everyone whose list mentions this account (to refresh their lists when it is deleted).
  public List<long> Watchers(long account){var list=new List<long>();using var db=Open();using var c=AccountStore.Command(db,"SELECT owner FROM contacts WHERE other=$a",[("$a",account)]);using var r=c.ExecuteReader();while(r.Read())list.Add(r.GetInt64(0));return list;}
  // Returns the time stamp, or null when the recipient already has too much waiting.
- public long? Hold(long sender,long recipient,string msgid,string type,string text,byte[]? blob){using var db=Open();
+ public long? Hold(long sender,long recipient,string msgid,string type,string text,byte[]? blob,string reply=""){using var db=Open();
   using(var c=AccountStore.Command(db,"SELECT COUNT(*),COALESCE(SUM(LENGTH(blob)),0) FROM dms WHERE recipient=$r",[("$r",recipient)])){using var r=c.ExecuteReader();r.Read();if(r.GetInt64(0)>=MaxPending||r.GetInt64(1)+(blob?.Length??0)>MaxPendingBytes)return null;}
-  var now=Now;AccountStore.Run(db,"INSERT INTO dms(sender,recipient,msgid,type,text,blob,created) VALUES($s,$r,$m,$t,$x,$b,$c)",("$s",sender),("$r",recipient),("$m",msgid),("$t",type),("$x",text),("$b",(object?)blob??DBNull.Value),("$c",now));return now;}
+  var now=Now;AccountStore.Run(db,"INSERT INTO dms(sender,recipient,msgid,type,text,blob,created,reply) VALUES($s,$r,$m,$t,$x,$b,$c,$y)",("$s",sender),("$r",recipient),("$m",msgid),("$t",type),("$x",text),("$b",(object?)blob??DBNull.Value),("$c",now),("$y",reply));return now;}
  public List<Held> Pending(long recipient){var list=new List<Held>();using var db=Open();
-  using var c=AccountStore.Command(db,"SELECT d.id,a.username,d.msgid,d.type,d.text,d.created FROM dms d JOIN accounts a ON a.id=d.sender WHERE d.recipient=$r ORDER BY d.id",[("$r",recipient)]);using var r=c.ExecuteReader();
-  while(r.Read())list.Add(new(r.GetInt64(0),r.GetString(1),r.GetString(2),r.GetString(3),r.GetString(4),r.GetInt64(5)));return list;}
+  using var c=AccountStore.Command(db,"SELECT d.id,a.username,d.msgid,d.type,d.text,d.created,d.reply FROM dms d JOIN accounts a ON a.id=d.sender WHERE d.recipient=$r ORDER BY d.id",[("$r",recipient)]);using var r=c.ExecuteReader();
+  while(r.Read())list.Add(new(r.GetInt64(0),r.GetString(1),r.GetString(2),r.GetString(3),r.GetString(4),r.GetInt64(5),r.GetString(6)));return list;}
  public byte[]? Blob(long row){using var db=Open();using var c=AccountStore.Command(db,"SELECT blob FROM dms WHERE id=$i",[("$i",row)]);return c.ExecuteScalar() as byte[];}
  // Returns who sent it, so they can be told it was delivered.
  public long? Ack(long recipient,string msgid){using var db=Open();using var c=AccountStore.Command(db,"DELETE FROM dms WHERE recipient=$r AND msgid=$m RETURNING sender",[("$r",recipient),("$m",msgid)]);return c.ExecuteScalar() is long sender?sender:null;}
@@ -53,7 +56,9 @@ sealed class DirectStore {
 
 // The live side of DMs: who is online (any number of devices per account), contact changes, delivery and confirmations.
 sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
- sealed class Device(Peer peer,long account,string name,string token){public readonly Peer Peer=peer;public readonly long Account=account;public readonly string Name=name,Token=token;}
+ // Edits: the app said (hello "edits") it understands replies, edits, deletes and reactions. Older apps never get the changes.
+ sealed class Device(Peer peer,long account,string name,string token,bool edits){public readonly Peer Peer=peer;public readonly long Account=account;public readonly string Name=name,Token=token;public readonly bool Edits=edits;}
+ static bool IsChange(string type)=>type is "edit" or "delete" or "react";
  sealed class Upload{public required string Id,Mime;public long Total;public int Seq;public (long Id,string Name)? To;public string? Problem;public readonly MemoryStream Data=new();}
  readonly object gate=new();readonly Dictionary<long,List<Device>> online=[];int connections;
  Device[] DevicesOf(long account){lock(gate)return online.TryGetValue(account,out var l)?[..l]:[];}
@@ -88,8 +93,8 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
    using var helloTimeout=CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);helloTimeout.CancelAfter(TimeSpan.FromSeconds(30));
    var hello=await Protocol.Read(socket,helloTimeout.Token);
    if(hello?.Kind!="hello"||hello.Token is not {Length:>0}||accounts.Session(hello.Token) is not {} who){await peer.Close("Your sign-in has expired. Sign in again.");await Peer.Drain(socket);return;}
-   me=new Device(peer,who.Id,who.Username,hello.Token);peer.Name=who.Username;bool first=Add(me);
-   await peer.Send(new Packet("ready",Text:"direct"));await peer.Send(MePacket(me.Account));await peer.Send(ContactsPacket(me.Account));
+   me=new Device(peer,who.Id,who.Username,hello.Token,(hello.Text??"").Split(' ').Contains("edits"));peer.Name=who.Username;bool first=Add(me);
+   await peer.Send(new Packet("ready",Text:"direct edits"));await peer.Send(MePacket(me.Account));await peer.Send(ContactsPacket(me.Account));
    if(first)await PushPresence(me.Account);
    store.Expire();await DeliverHeld(me);
    await Loop(me,socket,context.RequestAborted);
@@ -97,23 +102,25 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
   finally{try{if(me!=null&&Remove(me))await PushPresence(me.Account);}finally{peer?.Abort();Interlocked.Decrement(ref connections);}}
  }
 
+ // An older app can't show changes, so they are dropped for it rather than waiting forever.
  async Task DeliverHeld(Device me){foreach(var h in store.Pending(me.Account)){
+  if(IsChange(h.Type)&&!me.Edits){store.Ack(me.Account,h.MsgId);continue;}
   byte[]? blob=h.Type=="picture"?store.Blob(h.Row):null;if(h.Type=="picture"&&blob==null)continue;
-  await SendDm(me.Peer,h.Sender,"in",h.MsgId,h.Type,h.Text,blob,h.Created);}}
+  await SendDm(me.Peer,h.Sender,"in",h.MsgId,h.Type,h.Text,blob,h.Created,h.Reply);}}
  // A DM as packets: one "dm" (for pictures followed by dm-chunk pieces and dm-end). Room says "in" or "out" (sent from your other device).
- static async Task SendDm(Peer to,string other,string direction,string id,string type,string text,byte[]? blob,long time){
-  await to.Send(new Packet("dm",Room:direction,Name:other,Text:text,Id:id,Type:type,Total:blob?.Length??0,Time:time));if(blob==null)return;
+ static async Task SendDm(Peer to,string other,string direction,string id,string type,string text,byte[]? blob,long time,string reply=""){
+  await to.Send(new Packet("dm",Room:direction,Name:other,Text:text,Id:id,Type:type,Total:blob?.Length??0,Time:time,Reply:reply));if(blob==null)return;
   for(int seq=0,o=0;o<blob.Length;seq++,o+=Media.ChunkBytes)await to.Send(new Packet("dm-chunk",Id:id,Seq:seq,Data:Convert.ToBase64String(blob,o,Math.Min(Media.ChunkBytes,blob.Length-o))));
   await to.Send(new Packet("dm-end",Id:id));}
  // Only mutual contacts can message each other.
  (long Id,string Name)? Recipient(Device me,string? name){var a=Accounts.ValidUsername(name)?accounts.Find(name!):null;
   return a!=null&&a.Id!=me.Account&&store.State(me.Account,a.Id)=="contact"&&store.State(a.Id,me.Account)=="contact"?(a.Id,a.Username):null;}
  // Held first, so nothing is lost if delivery fails; the recipient's apps confirm with dm-ack, which deletes it.
- async Task Deliver(Device me,(long Id,string Name) to,string id,string type,string text,byte[]? blob){
-  if(store.Hold(me.Account,to.Id,id,type,text,blob) is not {} time){await me.Peer.Send(new Packet("error",Id:id,Text:$"{to.Name}'s inbox is full. Try again later."));return;}
-  await me.Peer.Send(new Packet("dm-sent",Id:id,Time:time));
-  foreach(var d in DevicesOf(to.Id))try{await SendDm(d.Peer,me.Name,"in",id,type,text,blob,time);}catch{d.Peer.Abort();}
-  foreach(var d in DevicesOf(me.Account))if(d!=me)try{await SendDm(d.Peer,to.Name,"out",id,type,text,blob,time);}catch{d.Peer.Abort();}}
+ async Task Deliver(Device me,(long Id,string Name) to,string id,string type,string text,byte[]? blob,string reply=""){
+  if(store.Hold(me.Account,to.Id,id,type,text,blob,reply) is not {} time){await me.Peer.Send(new Packet("error",Id:id,Text:$"{to.Name}'s inbox is full. Try again later."));return;}
+  await me.Peer.Send(new Packet("dm-sent",Id:id,Time:time));bool change=IsChange(type);
+  foreach(var d in DevicesOf(to.Id))if(d.Edits||!change)try{await SendDm(d.Peer,me.Name,"in",id,type,text,blob,time,reply);}catch{d.Peer.Abort();}
+  foreach(var d in DevicesOf(me.Account))if(d!=me&&(d.Edits||!change))try{await SendDm(d.Peer,to.Name,"out",id,type,text,blob,time,reply);}catch{d.Peer.Abort();}}
 
  async Task Loop(Device me,WebSocket socket,CancellationToken ct){
   var window=DateTime.UtcNow;int packets=0,messages=0,contactChanges=0,profileChanges=0;var mediaWindow=DateTime.UtcNow;long mediaBudget=0;var lastTyping=DateTime.MinValue;var avatarBytes=new byte[Profiles.MaxAvatar];
@@ -151,9 +158,12 @@ sealed class DirectHub(AccountStore accounts,DirectStore store,Bots bots) {
     case "dm":
      if(!Media.ValidId(p.Id))throw new IOException("Invalid message.");
      if(++messages>30){await Fail(p.Id,"Slow down. Message not sent.");break;}
-     if(!(p.Type switch{"text"=>!string.IsNullOrWhiteSpace(p.Text)&&p.Text.Length<=2000,"sticker"=>Stickers.Ids.Contains(p.Text),_=>false})){await Fail(p.Id,"That message can't be sent.");break;}
+     // Reply: the id answered (optional for text and stickers), or the id an edit, delete or reaction is for.
+     var reply=p.Reply??"";bool text=!string.IsNullOrWhiteSpace(p.Text)&&p.Text.Length<=2000;
+     if(!(p.Type switch{"text"=>text&&(reply==""||Media.ValidId(reply)),"sticker"=>Stickers.Ids.Contains(p.Text)&&(reply==""||Media.ValidId(reply)),
+       "edit"=>text&&Media.ValidId(reply),"delete"=>Media.ValidId(reply),"react"=>Reaction.Valid(p.Text)&&Media.ValidId(reply),_=>false})){await Fail(p.Id,"That message can't be sent.");break;}
      if(Recipient(me,p.Name) is not {} to){await Fail(p.Id,"You can only message your contacts.");break;}
-     await Deliver(me,to,p.Id,p.Type,p.Text,null);break;
+     await Deliver(me,to,p.Id,p.Type,p.Type=="delete"?"":p.Text,null,reply);break;
     case "dm-picture":
      if((DateTime.UtcNow-mediaWindow).TotalMinutes>=10){mediaWindow=DateTime.UtcNow;mediaBudget=0;}
      if(picture!=null||!Media.ValidId(p.Id)||!Media.IsImage(p.Text)||p.Total<=0||p.Total>Media.MaxImage)throw new IOException("Invalid picture.");
