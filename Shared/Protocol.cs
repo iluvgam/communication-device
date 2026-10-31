@@ -22,6 +22,14 @@ public sealed record Reaction(string E,List<string> N){
 public sealed record ContactInfo(string Name,string State,bool Online,string Presence="",string Mood="",string Avatar="",bool Bot=false){
  public static List<ContactInfo> Parse(string json){try{return JsonSerializer.Deserialize<List<ContactInfo>>(json)??[];}catch(JsonException){return [];}}
 }
+// Feedback on an AI member's replies, like ChatGPT's: Type "up" or "down" (Reply = the message id, Text = an optional reason),
+// or "survey" ("How has your experience with Bryan been so far?": Seq = 1–5, Text = an optional comment). Room says where
+// ("dm" or "room:<name>"). It goes only to the AI member's own service, which learns from it.
+public static class Feedback {
+ public const int MaxText=500;
+ public static bool Valid(Packet p)=>p.Type switch{"up" or "down"=>Media.ValidId(p.Reply),"survey"=>p.Seq is >=1 and <=5&&string.IsNullOrEmpty(p.Reply),_=>false}
+  &&(p.Text??"").Length<=MaxText&&!(p.Text??"").Any(c=>char.IsControl(c)&&c!='\n')&&(p.Room??"").Length<=40&&!(p.Room??"").Any(char.IsControl);
+}
 // Accounts live on the relay: unique username, password (same rules as room passwords) and a one-time recovery key.
 public static class Accounts {
  public const string UsernameRule="Username: 3–20 letters, numbers, - or _.",GuestSuffix=" (guest)";
@@ -60,6 +68,8 @@ public sealed class DirectClient:IDisposable {
  public Task Contact(string action,string username)=>Write(new Packet("contact-"+action,Name:username));
  public async Task<string> SendText(string to,string text,string reply=""){if(string.IsNullOrWhiteSpace(text)||text.Length>2000)throw new IOException("Message must be 1–2,000 characters.");var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:"text",Reply:reply));return id;}
  public async Task<string> SendSticker(string to,string sticker,string reply=""){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:sticker,Id:id,Type:"sticker",Reply:reply));return id;}
+ // Feedback for an AI member (see Feedback). Returns its id; the relay answers dm-sent, or an error with that id.
+ public async Task<string> SendFeedback(string bot,string type,string target,string where,int rating=0,string comment=""){var id=Media.NewId();await Write(new Packet("feedback",Name:bot,Id:id,Type:type,Reply:target,Room:where,Seq:rating,Text:comment));return id;}
  // A change to an earlier DM: "edit" (new text), "delete", or "react" (an emoji; sending it again takes it back). Delivered like a message.
  public async Task<string> SendChange(string to,string type,string target,string text=""){var id=Media.NewId();await Write(new Packet("dm",Name:to,Text:text,Id:id,Type:type,Reply:target));return id;}
  // Pictures only (up to 5 MB), in the same pieces as room media; each piece takes the send lock on its own.
