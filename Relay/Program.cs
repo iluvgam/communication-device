@@ -18,8 +18,9 @@ var app=builder.Build();var rooms=new ConcurrentDictionary<string,ChatRoom>();us
 // Accounts are on when AccountsDb is set, or when a Render disk is mounted at /var/data. Room messages are never written to disk:
 // each open room keeps its last 100 in memory (for late joiners, edits and reactions) and forgets them when it ends.
 AccountStore? accounts=null;DirectHub? direct=null;var accountsState="off";
-// AI members: reserved names (default "bryan"); summoning and bot sign-in only work when BotKey is set.
-var bots=new Bots((builder.Configuration["Bots"]??"bryan").Split(','),builder.Configuration["BotKey"]);
+// AI members: reserved names (default "groki", plus "bryan", his old name, kept so nobody can take it); summoning and
+// bot sign-in only work when BotKey is set.
+var bots=new Bots((builder.Configuration["Bots"]??"groki,bryan").Split(','),builder.Configuration["BotKey"]);
 var accountsPath=builder.Configuration["AccountsDb"]??(Directory.Exists("/var/data")?"/var/data/accounts.db":null);
 // Direct messages need accounts: contacts and held DMs live in the same database file.
 if(accountsPath!=null)try{accounts=new AccountStore(accountsPath);direct=new DirectHub(accounts,new DirectStore(accounts),bots);accountsState="on";ChatRoom.Features+=" accounts direct profiles receipts"+(bots.On?" bots":"");
@@ -27,8 +28,8 @@ if(accountsPath!=null)try{accounts=new AccountStore(accountsPath);direct=new Dir
  catch(Exception e) when(e is SqliteException or IOException or UnauthorizedAccessException){accountsState="error";app.Logger.LogError("Accounts are off: cannot use {Path}: {Message}",accountsPath,e.Message);}
 // A ping without a pong reply within 20 s ends the connection, so dropped clients leave promptly.
 app.UseRateLimiter();app.UseWebSockets(new WebSocketOptions{KeepAliveInterval=TimeSpan.FromSeconds(20),KeepAliveTimeout=TimeSpan.FromSeconds(20)});
-app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.15 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
-app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.15",accounts=accountsState,bots=bots.On&&accounts!=null?"on":"off"}));
+app.MapGet("/",()=>Results.Text("3DFx Vista relay 0.16 is running. Use this HTTPS address in 3DFxVista.exe. Rooms and messages are temporary."));
+app.MapGet("/health",()=>Results.Ok(new{status="ok",version="0.16",accounts=accountsState,bots=bots.On&&accounts!=null?"on":"off"}));
 app.Map("/chat",async context=>{
  if(!context.WebSockets.IsWebSocketRequest){context.Response.StatusCode=400;return;}
  if(Interlocked.Increment(ref connections)>128){Interlocked.Decrement(ref connections);context.Response.StatusCode=503;return;}
@@ -109,7 +110,7 @@ app.Map("/chat",async context=>{
    if(++count>90){await Reject("Too many messages. Disconnected.");break;}
    if(count>30){await peer.Send(new Packet("error",Text:"Slow down. Message not sent."));continue;}
    await room.Post(peer,sticker?"sticker":"text",p.Text,p.Reply??"");
-   // "@bryan": the bot gets a one-time pass for this room and the message that called it. Offline? Only the caller is told.
+   // "@groki": the bot gets a one-time pass for this room and the message that called it. Offline? Only the caller is told.
    if(!sticker&&direct!=null&&bots.Mentioned(p.Text) is {} called&&!room.Has(Bots.Display(called))&&!bots.Recently(key,called)){
     var pass=bots.NewPass(key,called);
     if(!await direct.PushToUser(called,new Packet("summon",Room:key,Token:pass,Name:peer.Name,Text:p.Text)))
