@@ -18,12 +18,12 @@ public sealed record Reaction(string E,List<string> N){
 }
 // One row of your contact list. State: contact, incoming (they asked you), outgoing (you asked them) or blocked.
 // Online, Presence (online/away/busy/offline), Mood (status line) and Avatar (picture id) are only filled in for accepted contacts.
-// Bot marks an AI member (Bryan), so apps can label it.
+// Bot marks an AI member (Groki), so apps can label it.
 public sealed record ContactInfo(string Name,string State,bool Online,string Presence="",string Mood="",string Avatar="",bool Bot=false){
  public static List<ContactInfo> Parse(string json){try{return JsonSerializer.Deserialize<List<ContactInfo>>(json)??[];}catch(JsonException){return [];}}
 }
 // Feedback on an AI member's replies, like ChatGPT's: Type "up" or "down" (Reply = the message id, Text = an optional reason),
-// or "survey" ("How has your experience with Bryan been so far?": Seq = 1–5, Text = an optional comment). Room says where
+// or "survey" ("How has your experience with Groki been so far?": Seq = 1–5, Text = an optional comment). Room says where
 // ("dm" or "room:<name>"). It goes only to the AI member's own service, which learns from it.
 public static class Feedback {
  public const int MaxText=500;

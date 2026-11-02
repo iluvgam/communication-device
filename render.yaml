@@ -2,9 +2,16 @@ services:
   - type: web
     name: friendschat-relay
     runtime: docker
-    plan: free
+    # A persistent disk needs a paid instance type; accounts are stored on the disk.
+    plan: starter
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
       - key: ASPNETCORE_URLS
         value: http://0.0.0.0:10000
+    # Accounts (usernames, password hashes, sign-in token hashes) live in /var/data/accounts.db.
+    # Messages, rooms and media are never stored. Without this disk, accounts stay off.
+    disk:
+      name: accounts
+      mountPath: /var/data
+      sizeGB: 1

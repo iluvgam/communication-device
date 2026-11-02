@@ -1,3 +1,6 @@
+3DFx Vista 0.15.0 / relay 0.16 — local loopback tests, 2026-11-02
+Relay: 112 of 112 passed. App checks: 83 of 83. Room checks: 36 of 36.
+
 PASS: Create password-protected room
 PASS: Duplicate room rejected
 PASS: Wrong password rejected
@@ -7,6 +10,106 @@ PASS: Join room case-insensitively with correct password
 PASS: Unicode broadcast and server-assigned sender name
 PASS: Bidirectional messaging
 PASS: Oversized chat message rejected
-PASS: Creator disconnect closes participants
-PASS: Closed room can be recreated without previous history
+PASS: Leaving participant is announced
+PASS: Room stays open when the creator leaves
+PASS: Empty room is removed and can be recreated
+PASS: Member list sent on join and leave
+PASS: Relay announces its features
+PASS: Nudge reaches others, not the sender, and is rate-limited
+PASS: Typing reaches others once per burst and floods do not disconnect
+PASS: Packet flood disconnects only the flooder
+PASS: Relay announces media and stickers
+PASS: Picture reaches others intact, not echoed to the sender
+PASS: Sender name comes from the relay
+PASS: Chat messages can pass between media pieces
+PASS: Oversized picture rejected
+PASS: Video over 25 MB rejected
+PASS: Unsupported file type rejected
+PASS: More bytes than announced cancels the transfer
+PASS: Leaving mid-transfer cancels it for others
+PASS: Sticker reaches everyone with the sender's name
+PASS: Unknown sticker rejected
+PASS: Media pieces fit in a packet even with a long Unicode name
+PASS: Media helpers
+PASS: Relay announces accounts
+PASS: Creating an account gives a session and a recovery key
+PASS: Usernames are unique regardless of case
+PASS: Account rules name the bad field
+PASS: Sign in works; wrong password and unknown user get the same answer
+PASS: Repeated wrong passwords make sign-in wait
+PASS: A signed-in name in rooms comes from the account
+PASS: Guests are marked as guests
+PASS: A fake or expired sign-in is refused, not turned into a guest
+PASS: Sign out ends the session
+PASS: Changing the password ends the other sessions
+PASS: The recovery key resets the password once
+PASS: The recovery key ignores dashes, spaces and case
+PASS: Making a new recovery key retires the old one
+PASS: Deleting an account needs the password and frees the username
+PASS: Account helpers
+PASS: Relay announces direct messages
+PASS: The DM connection needs a valid sign-in
+PASS: Contact request, accept, and online status
+PASS: Asking each other makes you contacts
+PASS: Unknown usernames and yourself can't be added
+PASS: Only contacts can be messaged
+PASS: A DM arrives live, is confirmed, and shows on the sender's other device
+PASS: A DM to an offline contact is held until their app confirms it
+PASS: Stickers work in DMs; unknown ones are refused
+PASS: A picture DM is held and delivered intact
+PASS: Blocking stops messages and requests
+PASS: Removing a contact ends messaging
+PASS: Deleting an account removes it from contacts
+PASS: Changing the password closes the old DM connections
+PASS: Over-long DMs are refused
+PASS: Relay announces profiles and receipts
+PASS: Status and status line reach contacts
+PASS: Appear offline looks offline to contacts but stays connected
+PASS: Your other devices and a reconnect keep your profile
+PASS: Pictures reach contacts only
+PASS: Bad pictures, unknown statuses and long status lines are refused
+PASS: Typing reaches contacts only
+PASS: Delivered is reported when the recipient's app confirms
+PASS: Seen is passed to the sender, not to strangers
+PASS: DM replies, edits, deletes and reactions reach the other side and your other devices
+PASS: Bad DM changes are refused
+PASS: Held changes reach new apps; older apps get only messages
+PASS: Relay announces bots
+PASS: Bryan, his old name, stays reserved
+PASS: Nobody can sign up as Groki
+PASS: Groki's sign-in needs the bot key, and only works for bot names
+PASS: @groki while Groki is offline tells only the caller
+PASS: @groki summons him: one-time pass, no room password, shown as Groki (AI)
+PASS: A pass only works for its room, and only for Groki
+PASS: Groki is marked as AI in contact lists
+PASS: Relay announces replies, edits, reactions and history
+PASS: Messages carry an id and time; a reply keeps the id it answers
+PASS: Late joiners get the room's recent history, then the join notice
+PASS: Only the author can edit; everyone sees it and history keeps the new text
+PASS: Only the author can delete; it leaves history
+PASS: Reactions toggle, show who reacted, and come with history
+PASS: A reaction can't be used to flood: at most 8 kinds per message
+PASS: A guest who reconnects can't edit old messages; a signed-in person can
+PASS: Pictures can be reacted to and deleted, but aren't replayed
+PASS: History keeps the last 100 messages
+PASS: Reaction helpers
+PASS: Feedback reaches Groki, is held while he's offline, and isn't echoed
+PASS: Feedback is only for AI members, and must be well formed
+PASS: Feedback helpers
+PASS: Relay names the bad room field
+PASS: Relay names the bad password field
+PASS: Relay names the bad display name field
+PASS: Full room rejects without saying ready first
+PASS: Fast typing does not disconnect the creator
+PASS: Invalid JSON closes only that connection
+PASS: Binary frame rejected
+PASS: JSON null and null fields rejected
+PASS: Frame over 16 KiB rejected
+PASS: Malformed message after joining keeps the room open
+PASS: Relay still works after bad input
 PASS: Production client enforces HTTPS and secure WebSockets
+PASS: Relay address accepts common pastes
+PASS: Form check blames the right field
+PASS: Settings round-trip and never store the password
+PASS: Older settings files get the startup sound on
+PASS: Typing line wording
