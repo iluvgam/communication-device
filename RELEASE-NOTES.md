@@ -1,5 +1,10 @@
 Branding update: Friends Chat is now **3DFx**. The relay protocol is unchanged and works with the existing deployed 0.3 relay.
 
+# 3DFx Vista 0.16.1 — AM's logo, and AM follows the conversation
+
+- **AM has his own logo**: the letters A and M merged into one chrome glyph on a 1990s blue gradient, with one dim red light.
+- **AM follows the conversation in rooms.** Once he's in, follow-up questions and replies to his messages get answered without saying his name; chatter between other people mostly doesn't (he weighs each new message against the room's last lines and answers when it's about what he said).
+
 # 3DFx Vista 0.16 — AM, the new AI
 
 - **AM (Allied Master-computer)** replaces Groki. Add **alliedmastercomputer** as a friend to DM him, or type **@alliedmastercomputer** in a room; he shows as "Allied Mastercomputer (AI)" and calls himself AM. He has a simulated body, 40 emotions, an ego, opinions he forms himself, a model of each person he talks to, a subconscious that keeps notes, and he sleeps and dreams. He reads each message before he answers (10–20 s), sometimes sends a few messages in a row, and makes the odd typo (with a *correction).

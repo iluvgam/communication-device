@@ -38,7 +38,7 @@ sealed class NotifyGate(TimeSpan quiet) {
 // The main window, laid out like a modern chat app: rooms rail | sidebar (DMs or the room's menu, you at the bottom) | chat | members.
 // Home shows your friends and DMs; each room you join gets an icon on the rail. Guests get rooms only.
 public sealed class Shell:Form {
- internal const string AppTitle="3DFx Vista 0.16",DefaultRelay="https://communication-device-1.onrender.com";
+ internal const string AppTitle="3DFx Vista 0.16.1",DefaultRelay="https://communication-device-1.onrender.com";
  // Who you are: signed in when Token is set (the name comes from the account); guests have only GuestName.
  internal string Relay="",Account="",GuestName="";internal string? Token;bool keepSignedIn;
  internal bool SoundOn=true,StartupSound=true,Receipts=true,Remember=true,DesktopNotifications=true,CloseToTray=true;internal bool? ReopenRooms;internal float TextScale=1f;

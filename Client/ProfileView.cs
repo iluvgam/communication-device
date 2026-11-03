@@ -87,55 +87,51 @@ sealed class ProfileCard:ToolStripDropDown {
   Items.Add(new ToolStripControlHost(page){Margin=Padding.Empty,Padding=Padding.Empty,AutoSize=false,Size=page.Size});}
 }
 
-// AM's logo, modern: a black hole drawn with a few bold, clean shapes. A near-black rounded square, a soft violet bloom,
-// a thick ring of light around the hole that sweeps through violet, magenta, pink and amber (brightest on the left, the
-// side of the disk that comes towards you), a slim tilted disk passing in front, and the pure black hole in the middle.
-// No stars, no gloss. Drawn in code so it stays sharp at any size; cached per size.
+// AM's logo: the letters A and M merged into one glyph (the A's left leg rises to a peak with its crossbar, the shared
+// middle stroke dips, and the M's right peak and stem finish it), in brushed chrome on a 1990s title-bar blue gradient
+// with faint CRT scanlines. The vibe of Ellison's AM, not there yet: cold and machine-made, and one dim red point of
+// light. Drawn in code so it stays sharp at any size; cached per size.
 // Full-bleed (no rounded corners) when it's used as his picture, because pictures get their own corners.
 static class AMLogo {
  static readonly Dictionary<(int,bool),Bitmap> cache=[];
  public static Bitmap Draw(int size,bool rounded=true){if(!cache.TryGetValue((size,rounded),out var bmp))cache[(size,rounded)]=bmp=Render(size,rounded);return bmp;}
  public static Bitmap Picture=>Draw(192,false);
- // The ring's colours going round from the top, clockwise; it ends where it started.
- static readonly (float At,int Rgb)[] Sweep=[(0f,0x7C5CFF),(0.22f,0xD946EF),(0.5f,0xFF4D8D),(0.74f,0xFFB347),(0.88f,0xFFE3A3),(1f,0x7C5CFF)];
- static Color SweepAt(float t,int alpha){
-  for(int i=1;i<Sweep.Length;i++)if(t<=Sweep[i].At){var (a,ca)=Sweep[i-1];var (b,cb)=Sweep[i];float k=(t-a)/(b-a);
-   int Mix(int sh)=>(int)Math.Round(((ca>>sh)&255)*(1-k)+((cb>>sh)&255)*k);return Color.FromArgb(alpha,Mix(16),Mix(8),Mix(0));}
-  return Aero.C(Sweep[^1].Rgb,alpha);}
+ // The glyph, on a 0..1 square: A's left foot, A's peak, the shared valley, M's right peak, M's right foot.
+ static readonly PointF[] Strokes=[new(0.16f,0.78f),new(0.37f,0.27f),new(0.56f,0.62f),new(0.77f,0.27f),new(0.77f,0.78f)];
+ static readonly (PointF A,PointF B) Bar=(new(0.234f,0.6f),new(0.545f,0.6f));
  static Bitmap Render(int s,bool rounded){
   var bmp=new Bitmap(s,s,PixelFormat.Format32bppPArgb);using var g=Graphics.FromImage(bmp);g.Clear(Color.Transparent);
   g.SmoothingMode=SmoothingMode.AntiAlias;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
   var r=new RectangleF(0,0,s,s);using var shape=rounded?Aero.Round(r,s*0.225f):new GraphicsPath();if(!rounded)shape.AddRectangle(r);
-  // Background: a quiet diagonal from deep indigo to almost black.
-  using(var b=new LinearGradientBrush(r,Aero.C(0x17123A),Aero.C(0x05040C),45f))g.FillPath(b,shape);
+  // The 90s gradient: deep navy at the top left to bright title-bar blue at the bottom right.
+  using(var b=new LinearGradientBrush(r,Color.Black,Color.Black,45f){InterpolationColors=new ColorBlend{
+   Colors=[Aero.C(0x00063A),Aero.C(0x000E80),Aero.C(0x0A4FB8),Aero.C(0x1084D0)],Positions=[0f,0.35f,0.75f,1f]}})g.FillPath(b,shape);
   var keep=g.Save();g.SetClip(shape);
-  float cx=s*0.5f,cy=s*0.5f,hole=s*0.2f,ring=s*0.255f;
-  // A soft violet bloom behind everything.
-  using(var bloom=new GraphicsPath()){bloom.AddEllipse(cx-s*0.46f,cy-s*0.46f,s*0.92f,s*0.92f);
-   using var b=new PathGradientBrush(bloom){CenterColor=Aero.C(0x8B5CF6,95),SurroundColors=[Aero.C(0x8B5CF6,0)]};g.FillPath(b,bloom);}
-  // The disk: a slim tilted ellipse, white-hot in the middle and fading out at both ends. Its far half is drawn first,
-  // so the ring and the hole cover it; its near half is drawn last, in front of both.
-  var disk=new RectangleF(cx-s*0.45f,cy-s*0.07f,s*0.9f,s*0.14f);
-  void Disk(){foreach(var (w,a) in new[]{(0.07f,70),(0.036f,255)}){
-    using var b=new LinearGradientBrush(RectangleF.Inflate(disk,1,s*0.1f),Color.Black,Color.Black,0f){InterpolationColors=new ColorBlend{
-     Colors=[Aero.C(0xFFB347,0),Aero.C(0xFFB347,a),Aero.C(0xFFF7EA,a),Aero.C(0xFF4D8D,a),Aero.C(0xFF4D8D,0)],Positions=[0f,0.2f,0.45f,0.8f,1f]}};
-    using var p=new Pen(b,s*w);g.DrawEllipse(p,disk);}}
-  var tilt=g.Save();g.TranslateTransform(cx,cy);g.RotateTransform(-16f);g.TranslateTransform(-cx,-cy);
-  g.SetClip(new RectangleF(0,0,s,cy),CombineMode.Intersect);Disk();g.Restore(tilt);
-  // The ring's glow: one smooth halo, brightest along the ring and fading both ways.
-  using(var halo=new GraphicsPath()){float o=ring+s*0.16f;halo.AddEllipse(cx-o,cy-o,o*2,o*2);float at=s*0.16f/o;
-   using var b=new PathGradientBrush(halo){CenterPoint=new PointF(cx,cy),InterpolationColors=new ColorBlend{
-    Colors=[Aero.C(0xE879F9,0),Aero.C(0xE879F9,120),Aero.C(0xE879F9,0),Aero.C(0xE879F9,0)],Positions=[0f,at,Math.Min(0.95f,at+0.25f),1f]}};g.FillPath(b,halo);}
-  // The ring of light: short arcs, each its own colour, so the colour sweeps smoothly around (GDI+ has no conic gradient).
-  using(var p=new Pen(Color.Black,s*0.07f)){const int n=180;
-   for(int i=0;i<n;i++){p.Color=SweepAt((i+0.5f)/n,255);g.DrawArc(p,cx-ring,cy-ring,ring*2,ring*2,-90f+i*360f/n,360f/n+1.2f);}}
-  // The hole: pure black, with a hairline of light right at its edge.
-  g.FillEllipse(Brushes.Black,cx-hole,cy-hole,hole*2,hole*2);
-  using(var p=new Pen(Aero.C(0xFFFFFF,110),Math.Max(1f,s*0.006f)))g.DrawEllipse(p,cx-hole,cy-hole,hole*2,hole*2);
-  // The near half of the disk crosses in front of the hole.
-  tilt=g.Save();g.TranslateTransform(cx,cy);g.RotateTransform(-16f);g.TranslateTransform(-cx,-cy);
-  g.SetClip(new RectangleF(0,cy,s,s),CombineMode.Intersect);Disk();g.Restore(tilt);
+  // CRT scanlines, very faint.
+  if(s>=48)using(var p=new Pen(Aero.C(0x000000,34),Math.Max(1f,s/170f)))for(float y=0;y<s;y+=Math.Max(3f,s/64f))g.DrawLine(p,0,y,s,y);
+  // A cold glow behind the glyph.
+  using(var glow=new GraphicsPath()){glow.AddEllipse(s*0.05f,s*0.08f,s*0.9f,s*0.84f);
+   using var b=new PathGradientBrush(glow){CenterColor=Aero.C(0x7FD6FF,70),SurroundColors=[Aero.C(0x7FD6FF,0)]};g.FillPath(b,glow);}
+  PointF P(PointF q)=>new(q.X*s,q.Y*s);
+  using var glyph=new GraphicsPath();glyph.AddLines(Strokes.Select(P).ToArray());glyph.StartFigure();glyph.AddLine(P(Bar.A),P(Bar.B));
+  float w=s*0.105f;
+  // a dark edge first, so the chrome reads on the bright part of the gradient
+  using(var p=new Pen(Aero.C(0x00031F,200),w+Math.Max(2f,s*0.03f)){LineJoin=LineJoin.MiterClipped,MiterLimit=1.6f,StartCap=LineCap.Flat,EndCap=LineCap.Flat})g.DrawPath(p,glyph);
+  // brushed chrome: bright on top, a cold steel band below, a little light again at the bottom
+  var span=new RectangleF(0,s*0.18f,s,s*0.66f);
+  using(var b=new LinearGradientBrush(span,Color.White,Color.White,90f){InterpolationColors=new ColorBlend{
+   Colors=[Aero.C(0xFFFFFF),Aero.C(0xDCEBFF),Aero.C(0x8EA3BF),Aero.C(0xC9D8EC),Aero.C(0xF4F8FF)],Positions=[0f,0.35f,0.55f,0.8f,1f]},WrapMode=WrapMode.TileFlipXY})
+  using(var p=new Pen(b,w){LineJoin=LineJoin.MiterClipped,MiterLimit=1.6f,StartCap=LineCap.Flat,EndCap=LineCap.Flat})g.DrawPath(p,glyph);
+  // a fine highlight down the middle of each stroke
+  if(s>=48)using(var p=new Pen(Aero.C(0xFFFFFF,120),Math.Max(1f,s*0.012f)){LineJoin=LineJoin.Miter})g.DrawPath(p,glyph);
+  // the one dim red point of light, in the M's right peak
+  float ex=s*0.69f,ey=s*0.6f,er=Math.Max(1.5f,s*0.022f);
+  using(var halo=new GraphicsPath()){halo.AddEllipse(ex-er*3,ey-er*3,er*6,er*6);
+   using var b=new PathGradientBrush(halo){CenterColor=Aero.C(0xFF3B30,150),SurroundColors=[Aero.C(0xFF3B30,0)]};g.FillPath(b,halo);}
+  using(var b=new SolidBrush(Aero.C(0xFF5A4E,230)))g.FillEllipse(b,ex-er,ey-er,er*2,er*2);
+  // a soft 90s gloss on the top
+  using(var b=new LinearGradientBrush(new RectangleF(0,-1,s,s*0.45f+2),Aero.C(0xFFFFFF,40),Aero.C(0xFFFFFF,0),90f))g.FillRectangle(b,0,0,s,s*0.45f);
   g.Restore(keep);
-  if(rounded)using(var p=new Pen(Aero.C(0xFFFFFF,28),Math.Max(1f,s/128f))){using var rim=Aero.Round(RectangleF.Inflate(r,-p.Width/2,-p.Width/2),s*0.22f);g.DrawPath(p,rim);}
+  if(rounded)using(var p=new Pen(Aero.C(0x9CC8FF,70),Math.Max(1f,s/128f))){using var rim=Aero.Round(RectangleF.Inflate(r,-p.Width/2,-p.Width/2),s*0.22f);g.DrawPath(p,rim);}
   return bmp;}
 }
