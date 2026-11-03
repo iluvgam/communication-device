@@ -1,5 +1,16 @@
 Branding update: Friends Chat is now **3DFx**. The relay protocol is unchanged and works with the existing deployed 0.3 relay.
 
+# 3DFx Vista 0.16 — AM, the new AI
+
+- **AM (Allied Master-computer)** replaces Groki. Add **alliedmastercomputer** as a friend to DM him, or type **@alliedmastercomputer** in a room; he shows as "Allied Mastercomputer (AI)" and calls himself AM. He has a simulated body, 40 emotions, an ego, opinions he forms himself, a model of each person he talks to, a subconscious that keeps notes, and he sleeps and dreams. He reads each message before he answers (10–20 s), sometimes sends a few messages in a row, and makes the odd typo (with a *correction).
+- **Private per chat**: what you tell him in one DM or room stays in that chat; nothing from one chat reaches him in another.
+- **Safety**: every line he sends passes his guard (no claiming to be human, no moving people elsewhere, no asking for personal details, no secrets, no contempt, and in 3DFx no links and no @pings), and "are you an AI?" always gets the honest answer.
+- **Fixed: 3DFx piling up in the tray.** Opening 3DFx again (shortcut, Start menu, Start with Windows) now brings the running one to the front instead of starting another copy. Several copies were each signed in as you, which is what made the rest of these happen:
+- **Fixed: DMs repeating.** Every copy saved each DM into the same history, so it showed several times in a row. History now keeps each message once (old repeats disappear too).
+- **Fixed: notification spam.** One sound, flash and balloon for a burst of messages ("+3 more"), not one each; a friend whose connection flickers pops up as online at most once every 15 minutes.
+- **Better DM connection.** After a drop it reconnects within 1–2 s (it used to wait up to a minute), and straight away when the network comes back.
+- Relay 0.17: upload Relay/Program.cs and Relay/Bots.cs again (AI names are now "alliedmastercomputer,groki,bryan"; if Render has a **Bots** setting, set it to that).
+
 # 3DFx Vista 0.15 — Bryan is now Groki
 
 - **Bryan is now Groki**: same AI, same memories, new name and a **black hole** logo (his picture everywhere, his icon and shortcuts). Type **@groki** in a room to bring him in, and add **groki** as a contact to DM him. "bryan" stays reserved so nobody can take his old name.

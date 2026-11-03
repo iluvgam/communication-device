@@ -26,7 +26,7 @@ sealed class ChatItem(ChatKind kind,string who,string text,DateTime at){
 // Note marks the faint "(edited)" after an edited message; it is not part of the text.
 readonly record struct Word(Rectangle R,string Text,string? Href,bool Mention,string Sep,bool Note=false);
 
-// Names carry their tag on the wire: "Groki (AI)" and "Jordan (guest)". The app shows the name plus a badge.
+// Names carry their tag on the wire: "Allied Mastercomputer (AI)" and "Jordan (guest)". The app shows the name plus a badge.
 static class Names {
  public static (string Name,string Tag) Split(string who)=>who.EndsWith(" (AI)",StringComparison.Ordinal)?(who[..^5],"AI"):who.EndsWith(Accounts.GuestSuffix,StringComparison.Ordinal)?(who[..^Accounts.GuestSuffix.Length],"GUEST"):(who,"");
 }
@@ -45,7 +45,7 @@ sealed class MessageList:Control {
  public event Action<ChatItem>? ReplyClicked,EditClicked,DeleteClicked;
  public event Action<ChatItem,string?,Point>? ReactClicked;
  public Func<bool> CanReply=()=>false,CanReact=()=>false,CanEdit=()=>false;
- // Feedback on Groki's replies (thumbs up / down): which messages can be rated, how you rated one ("up", "down" or null).
+ // Feedback on AM's replies (thumbs up / down): which messages can be rated, how you rated one ("up", "down" or null).
  public Func<ChatItem,bool> CanRate=_=>false;public Func<ChatItem,string?> RatingOf=_=>null;
  public event Action<ChatItem,bool>? Rated;public event Action? SurveyClicked;
  // Each message as it arrives (not while loading history in one go).
@@ -258,7 +258,7 @@ sealed class MessageList:Control {
    if(hasSelection)m.Item("Copy",CopySelection);
    if(link!=null){m.Item("Open link",()=>OpenLink(link));m.Item("Copy link",()=>Clipboard.SetText(link));}
    if(it is {Kind:not (ChatKind.Welcome or ChatKind.Picture or ChatKind.Video or ChatKind.Sticker)})m.Item(hasSelection?"Copy whole message":"Copy text",()=>Clipboard.SetText(it.Text));
-   if(it is {IsMessage:true,Id.Length:>0}&&CanRate(it)){m.Item("Good response",()=>Rated?.Invoke(it,true));m.Item("Bad response",()=>Rated?.Invoke(it,false));m.Item("Rate your experience with Groki…",()=>SurveyClicked?.Invoke());}
+   if(it is {IsMessage:true,Id.Length:>0}&&CanRate(it)){m.Item("Good response",()=>Rated?.Invoke(it,true));m.Item("Bad response",()=>Rated?.Invoke(it,false));m.Item("Rate your experience with AM…",()=>SurveyClicked?.Invoke());}
    if(it is {IsMessage:true,Id.Length:>0}){var at=Cursor.Position;
     if(CanReact())m.Item("Add reaction",()=>ReactClicked?.Invoke(it,null,at));
     if(CanReply())m.Item("Reply",()=>ReplyClicked?.Invoke(it));

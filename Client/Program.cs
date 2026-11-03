@@ -6,13 +6,39 @@ static class Program {
  // --preview fills the window with sample content for screenshots; it never connects. After it: room (default), dm, friends, guest, login,
  // settings, join, addfriend, profile, search, appearance, windows, or the path of a video to use as the sample video.
  // --tray starts hidden in the system tray (used by "Start with Windows").
- [STAThread] static void Main(string[] args){Velopack.VelopackApp.Build().Run();ApplicationConfiguration.Initialize();Application.Run(new Shell(args.Contains("--preview"),args.SkipWhile(a=>a!="--preview").Skip(1).FirstOrDefault(),args.Contains("--tray")));}
+ // One 3DFx per Windows user: opening it again shows the one that's running (see SingleInstance).
+ [STAThread] static void Main(string[] args){Velopack.VelopackApp.Build().Run();var preview=args.Contains("--preview");
+  if(!preview&&!SingleInstance.First()){if(!args.Contains("--tray"))SingleInstance.ShowOther();return;}
+  ApplicationConfiguration.Initialize();var shell=new Shell(preview,args.SkipWhile(a=>a!="--preview").Skip(1).FirstOrDefault(),args.Contains("--tray"));
+  if(!preview)SingleInstance.Listen(()=>{try{shell.BeginInvoke(shell.Restore);}catch(InvalidOperationException){}});
+  Application.Run(shell);}
+}
+
+// Opening 3DFx again (a shortcut, the Start menu, Start with Windows) used to start another copy every time: each one
+// sat in the tray, signed in as you, got every DM, saved it and notified you. Now the first copy holds a named mutex for
+// this Windows user, and a second one just asks it (a named event) to come to the front, then quits.
+static class SingleInstance {
+ internal static string Name="3DFxVista-"+Environment.UserName;  // tests use their own
+ static Mutex? mine;
+ public static bool First(){var m=new Mutex(true,@"Local\"+Name,out var created);if(created){mine=m;return true;}m.Dispose();return false;}
+ public static void ShowOther(){try{using var e=EventWaitHandle.OpenExisting(@"Local\"+Name+"-show");e.Set();}catch(Exception x) when(x is WaitHandleCannotBeOpenedException or UnauthorizedAccessException){}}
+ public static void Listen(Action show){var e=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\"+Name+"-show");
+  new Thread(()=>{while(e.WaitOne())show();}){IsBackground=true,Name="3DFx show"}.Start();}
+}
+
+// Lets one notification through per conversation in a burst: the first message shows; the rest within the quiet time are
+// held back, and the next one after it says how many there were (Allow returns that count, or null to stay quiet).
+sealed class NotifyGate(TimeSpan quiet) {
+ readonly Dictionary<string,(DateTime Last,int Held)> seen=new(StringComparer.OrdinalIgnoreCase);
+ public int? Allow(string key,DateTime now){
+  if(seen.TryGetValue(key,out var s)&&now-s.Last<quiet){seen[key]=(s.Last,s.Held+1);return null;}
+  var held=s.Held;seen[key]=(now,0);return held;}
 }
 
 // The main window, laid out like a modern chat app: rooms rail | sidebar (DMs or the room's menu, you at the bottom) | chat | members.
 // Home shows your friends and DMs; each room you join gets an icon on the rail. Guests get rooms only.
 public sealed class Shell:Form {
- internal const string AppTitle="3DFx Vista 0.15",DefaultRelay="https://communication-device-1.onrender.com";
+ internal const string AppTitle="3DFx Vista 0.16",DefaultRelay="https://communication-device-1.onrender.com";
  // Who you are: signed in when Token is set (the name comes from the account); guests have only GuestName.
  internal string Relay="",Account="",GuestName="";internal string? Token;bool keepSignedIn;
  internal bool SoundOn=true,StartupSound=true,Receipts=true,Remember=true,DesktopNotifications=true,CloseToTray=true;internal bool? ReopenRooms;internal float TextScale=1f;
@@ -28,6 +54,8 @@ public sealed class Shell:Form {
  readonly TopBar topBar=new(){Dock=DockStyle.Top};
  // Friends seen online, for Steam-style "Sam is now online" pop-ups (filled quietly from the first friends list).
  HashSet<string> onlineSeen=new(StringComparer.OrdinalIgnoreCase);bool onlineSeeded;
+ // At most one balloon per conversation per 10 s, and one "is now online" per friend per 15 minutes (connections flicker).
+ readonly NotifyGate notifyGate=new(TimeSpan.FromSeconds(10)),onlineGate=new(TimeSpan.FromMinutes(15));
  readonly Panel sidebar=new(){Dock=DockStyle.Left,BackColor=Aero.Side};
  readonly SideTitle sideTitle=new(){Dock=DockStyle.Top};
  readonly SideList side=new(Aero.Side){Dock=DockStyle.Fill};
@@ -151,23 +179,23 @@ public sealed class Shell:Form {
 
  // Settings: relay, guest name and choices are remembered; the sign-in only with "Keep me signed in" (encrypted for this Windows user).
  void LoadSettings(){var prefs=ClientPrefs.Load();DesktopNotifications=prefs.Notifications;CloseToTray=prefs.CloseToTray;ReopenRooms=prefs.ReopenRooms;trayTipShown=prefs.TrayTipShown;
-  rated=prefs.Rated??[];grokiSeen=prefs.GrokiSeen;surveyDone=prefs.SurveyDone;surveyAfter=prefs.SurveyAfter;
+  rated=prefs.Rated??[];amSeen=prefs.AMSeen;surveyDone=prefs.SurveyDone;surveyAfter=prefs.SurveyAfter;
   savedRooms=prefs.Rooms??[];SetTextScale(prefs.TextScale is >=0.8f and <=1.5f?prefs.TextScale:1f,save:false);var saved=Settings.Load(Settings.DefaultPath);if(saved==Settings.Empty)return;
   Relay=saved.Relay;GuestName=saved.Name;SoundOn=saved.Sound;StartupSound=saved.StartupSound;Receipts=saved.ReadReceipts;
   if(saved.Session.Length>0&&SessionVault.Unprotect(saved.Session) is {} kept){Token=kept;Account=saved.Account;keepSignedIn=true;}}
- internal void SavePrefs(){if(Token=="preview")return;try{new ClientPrefs(DesktopNotifications,CloseToTray,ReopenRooms,TextScale,trayTipShown,savedRooms,rated,grokiSeen,surveyDone,surveyAfter).Save();}catch(Exception e) when(e is IOException or UnauthorizedAccessException){}}
+ internal void SavePrefs(){if(Token=="preview")return;try{new ClientPrefs(DesktopNotifications,CloseToTray,ReopenRooms,TextScale,trayTipShown,savedRooms,rated,amSeen,surveyDone,surveyAfter).Save();}catch(Exception e) when(e is IOException or UnauthorizedAccessException){}}
  internal void SaveSettings(){if(Token=="preview")return;
   SavePrefs();try{var keep=keepSignedIn&&Token!=null;if(Remember)new Settings(Relay,GuestName,SoundOn,StartupSound,keep?Account:"",keep?SessionVault.Protect(Token!):"",Receipts).Save(Settings.DefaultPath);else File.Delete(Settings.DefaultPath);}
   catch(Exception e) when(e is IOException or UnauthorizedAccessException){Toast("Could not save settings.",true);}}
- // Someone's picture: Groki (and any AI member) always shows his logo; guests have none.
- internal Image? Face(string who){var (name,tag)=Names.Split(who);if(tag=="GUEST")return null;return tag=="AI"||Hub.Find(name)?.Bot==true?GrokiLogo.Picture:Hub.Avatar(name);}
+ // Someone's picture: AM (and any AI member) always shows his logo; guests have none.
+ internal Image? Face(string who){var (name,tag)=Names.Split(who);if(tag=="GUEST")return null;return tag=="AI"||Hub.Find(name)?.Bot==true?AMLogo.Picture:Hub.Avatar(name);}
  internal void Toast(string text,bool problem)=>Pop(text,problem);
  void PlaceSearch()=>search.Location=new Point(Math.Max(S(8),chatBody.Width-search.Width-S(24)),S(12));
  void OpenSearch(){if(Current==null)return;PlaceSearch();search.Visible=true;search.BringToFront();search.Input.Box.Focus();search.Input.Box.SelectAll();
   if(search.Input.Box.TextLength>0){Current.List.Search(search.Input.Box.Text);search.SetStatus(Current.List.SearchStatus);}}
  void CloseSearch()=>CloseSearch(Current);
  void CloseSearch(Conversation? c){c?.List.EndSearch();search.Visible=false;search.SetStatus("");if(Current is {CanSend:true})composer.Box.Focus();}
- void Restore(){Show();if(WindowState==FormWindowState.Minimized)WindowState=FormWindowState.Normal;Activate();}
+ internal void Restore(){Show();if(WindowState==FormWindowState.Minimized)WindowState=FormWindowState.Normal;Activate();}
  void Quit(){quitting=true;Close();}
  // "Start with Windows": a per-user Run entry that opens 3DFx hidden in the tray.
  const string RunKey=@"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -175,7 +203,8 @@ public sealed class Shell:Form {
   set{using var k=Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey);if(value)k.SetValue("3DFx",$"\"{Environment.ProcessPath}\" --tray");else k.DeleteValue("3DFx",false);}}
  // A Windows notification, only while 3DFx isn't in front (and if turned on in Settings).
  void Notify(string title,string text,Action open){if(!DesktopNotifications||closing||Token=="preview"||ActiveForm==this&&WindowState!=FormWindowState.Minimized)return;
-  openNotified=open;var body=text.Replace("\r","").Replace("\n"," ");tray.ShowBalloonTip(6000,title,body.Length>180?body[..180]+"…":body,ToolTipIcon.None);}
+  if(notifyGate.Allow(title,DateTime.UtcNow) is not {} held)return;
+  openNotified=open;var body=text.Replace("\r","").Replace("\n"," ")+(held>0?$"  (+{held} more)":"");tray.ShowBalloonTip(6000,title,body.Length>180?body[..180]+"…":body,ToolTipIcon.None);}
  void Pop(string text,bool problem,string? name=null,Image? face=null){if(closing)return;toast.RightInset=chatView.Visible&&members.Visible?members.Width:0;toast.Show(text,problem,name,face);}
 
  // Switching what is on screen keeps each conversation's unsent text.
@@ -194,7 +223,7 @@ public sealed class Shell:Form {
  void Hook(MessageList list){list.ProfileClicked+=ShowProfile;
   list.CanRate=it=>Token!=null&&Hub.FeedbackOn&&it.Kind==ChatKind.Text&&it.Id.Length>0&&it.Who!=list.Me&&BotName(it.Who)!=null;
   list.RatingOf=it=>rated.GetValueOrDefault(it.Id);list.Rated+=(it,up)=>_=Rate(list,it,up);list.SurveyClicked+=()=>ShowSurvey(true);
-  list.Added+=it=>{if(it.Kind==ChatKind.Text&&it.Who!=list.Me&&(DateTime.Now-it.At).TotalMinutes<2&&BotName(it.Who)!=null)GrokiSaid();};
+  list.Added+=it=>{if(it.Kind==ChatKind.Text&&it.Who!=list.Me&&(DateTime.Now-it.At).TotalMinutes<2&&BotName(it.Who)!=null)AMSaid();};
   list.ReplyClicked+=StartReply;list.EditClicked+=StartEdit;list.DeleteClicked+=it=>_=DeleteMessage(it);
   list.ReactClicked+=(it,emoji,at)=>{if(emoji!=null){_=React(it,emoji);return;}var pick=new EmojiPicker(withStickers:false);pick.Picked+=e=>_=React(it,e);pick.Closed+=(_,_)=>BeginInvoke(pick.Dispose);pick.Show(at);};
   list.KeyPress+=(_,e)=>{if(char.IsControl(e.KeyChar)||Current is not {CanSend:true})return;composer.Box.Focus();composer.Box.SelectionStart=composer.Box.TextLength;composer.Box.SelectedText=e.KeyChar.ToString();e.Handled=true;};}
@@ -202,7 +231,7 @@ public sealed class Shell:Form {
   bool me=room!=null&&room.MyName.Length>0?who==room.MyName||(tag.Length==0&&name.Equals(Account,StringComparison.OrdinalIgnoreCase)):name.Equals(Token!=null?Account:GuestName,StringComparison.OrdinalIgnoreCase);
   var info=tag=="GUEST"||me?null:Hub.Find(name);
   string? presence=me?(Token!=null?(Hub.Online?(Hub.MyPresence=="invisible"?"offline":Hub.MyPresence):"offline"):null):info is {State:"contact"}?(info.Online?info.Presence:"offline"):null;
-  var line=me?(Token!=null?$"That's you  •  {Profiles.Label(presence??"offline")}":"That's you (guest)"):tag=="AI"?"AI member: joins when someone types @groki":tag=="GUEST"?"Guest, no 3DFx account":
+  var line=me?(Token!=null?$"That's you  •  {Profiles.Label(presence??"offline")}":"That's you (guest)"):tag=="AI"?"AI member: joins when someone types @alliedmastercomputer":tag=="GUEST"?"Guest, no 3DFx account":
    info?.State switch{"contact"=>$"{Profiles.Label(presence??"offline")}  •  Friend","incoming"=>"Sent you a friend request","outgoing"=>"Friend request sent","blocked"=>"Blocked",_=>"3DFx account"};
   var actions=new List<(string,ButtonKind,Action)>();
   if(me){if(Token!=null)actions.Add(("Edit profile",ButtonKind.Primary,()=>OpenSettings("Profile")));}
@@ -221,7 +250,7 @@ public sealed class Shell:Form {
  // Steam-style pop-up when a friend comes online (not for the ones already online when you sign in).
  void NoticeOnline(){if(Token==null||!Hub.Online){onlineSeen.Clear();onlineSeeded=false;return;}if(Hub.Contacts.Count==0)return;
   var now=Hub.Contacts.Where(c=>c.State=="contact"&&c.Online).Select(c=>c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-  if(onlineSeeded)foreach(var name in now.Except(onlineSeen))Pop($"{name}\nis now online",false,name,Face(name));
+  if(onlineSeeded)foreach(var name in now.Except(onlineSeen))if(onlineGate.Allow(name,DateTime.UtcNow)!=null)Pop($"{name}\nis now online",false,name,Face(name));
   onlineSeen=now;onlineSeeded=true;}
  void RefreshRail()=>rail.Set(room==null,Token==null?0:Hub.Contacts.Sum(c=>Hub.Unread(c.Name))+Hub.Contacts.Count(c=>c.State=="incoming"),
   rooms.Select(r=>new RoomRail.Entry(r.Key,r.Room,r==room,r.Unread,r.Mentions,!r.Connected)).ToList());
@@ -246,7 +275,7 @@ public sealed class Shell:Form {
    if(!r.Connected)rows.Add(new SideRow{Text="Rejoin",Glyph=Aero.IconRetry,Color=Aero.Green,Click=()=>_=Rejoin(r)});
    rows.Add(new SideRow{Text="Invite friends",Glyph=Aero.IconLink,Click=()=>Invite(r)});
    if(r.CanNudge)rows.Add(new SideRow{Text="Nudge everyone",Glyph=Aero.IconBolt,Click=()=>_=r.SendNudge()});
-   if(r.HasBots&&r.Connected)rows.Add(new SideRow{Text="Bring in Groki (AI)",Glyph=Aero.IconChat,Click=()=>Mention("groki")});
+   if(r.HasBots&&r.Connected)rows.Add(new SideRow{Text="Bring in AM (AI)",Glyph=Aero.IconChat,Click=()=>Mention("alliedmastercomputer")});
    rows.Add(new SideRow{Text="Leave room",Glyph=Aero.IconLeave,Color=Aero.Red,Click=()=>LeaveRoom(r)});}
   side.SetRows(rows);
   if(Token!=null)me.Show(Account,Hub.Online?(Hub.MyMood.Length>0?Hub.MyMood:Profiles.Label(Hub.MyPresence)):"Connecting…",Hub.Online?(Hub.MyPresence=="invisible"?"offline":Hub.MyPresence):"offline",Face(Account));
@@ -264,7 +293,7 @@ public sealed class Shell:Form {
   activity.Set(c.Activity,c.Note);}
  void RefreshMembers(RoomSession r){var rows=new List<SideRow>{new(){Heading=true,Text=$"In room — {r.Members.Length}"}};
   foreach(var m in r.Members.OrderBy(m=>Names.Split(m).Tag=="AI"?1:0).ThenBy(m=>m,StringComparer.OrdinalIgnoreCase)){var (name,tag)=Names.Split(m);var who=m;
-   rows.Add(new SideRow{Avatar=true,Text=name,Tag=tag,Picture=Face(m),Color=m==r.MyName?Aero.Bright:Aero.NameColor(m),Sub=m==r.MyName?"you":tag=="AI"?"AI member • @groki":"",
+   rows.Add(new SideRow{Avatar=true,Text=name,Tag=tag,Picture=Face(m),Color=m==r.MyName?Aero.Bright:Aero.NameColor(m),Sub=m==r.MyName?"you":tag=="AI"?"AI member • @alliedmastercomputer":"",
     Click=()=>ShowProfile(who,Cursor.Position),Menu=at=>MemberMenu(r,who,name,tag).Show(at)});}
   members.SetRows(rows);}
  void Mention(string name){var text=composer.Box.Text;var add="@"+name+" ";if(!text.Contains(add,StringComparison.OrdinalIgnoreCase))composer.Box.Text=(text.Length>0&&!text.EndsWith(' ')?text+" ":text)+add;composer.Box.SelectionStart=composer.Box.TextLength;composer.Box.Focus();}
@@ -281,7 +310,7 @@ public sealed class Shell:Form {
  // Menus.
  ContextMenuStrip RoomMenu(RoomSession r){var m=DarkMenu.Create();
   m.Item("Invite friends (copy invite)",()=>Invite(r));if(r.CanNudge)m.Item("Send a nudge",()=>_=r.SendNudge());
-  if(r.HasBots&&r.Connected)m.Item("Bring in Groki (AI)",()=>{Select(r,null);Mention("groki");});
+  if(r.HasBots&&r.Connected)m.Item("Bring in AM (AI)",()=>{Select(r,null);Mention("alliedmastercomputer");});
   if(!r.Connected)m.Item("Rejoin",()=>_=Rejoin(r));
   if(r.Unread>0)m.Item("Mark as read",()=>{r.Unread=r.Mentions=0;UpdateUnread();RefreshRail();});
   m.Items.Add(new ToolStripSeparator());m.Item("Leave room",()=>LeaveRoom(r),danger:true);return m;}
@@ -365,23 +394,24 @@ public sealed class Shell:Form {
   try{var bytes=await File.ReadAllBytesAsync(d.FileName);await Hub.SetAvatar(await Task.Run(()=>Avatars.Prepare(bytes)));}
   catch(Exception e) when(e is IOException or UnauthorizedAccessException or ArgumentException or OutOfMemoryException or ExternalException){Toast(e is IOException?e.Message:"That file isn't a picture 3DFx can read.",true);}}
 
- // Feedback for Groki (see GrokiFeedback.cs). In rooms AI members carry the "(AI)" tag; in DMs the contact list says.
- Dictionary<string,string> rated=[];int grokiSeen;bool surveyDone,surveyOpen;long surveyAfter;
- string? BotName(string who){var (name,tag)=Names.Split(who);return tag=="AI"?name.ToLowerInvariant():Hub.Find(who) is {Bot:true} c?c.Name:null;}
+ // Feedback for AM (see AmFeedback.cs). In rooms AI members carry the "(AI)" tag; in DMs the contact list says.
+ Dictionary<string,string> rated=[];int amSeen;bool surveyDone,surveyOpen;long surveyAfter;
+ // "Allied Mastercomputer (AI)" in a room is the account alliedmastercomputer.
+ string? BotName(string who){var (name,tag)=Names.Split(who);return tag=="AI"?name.Replace(" ","").ToLowerInvariant():Hub.Find(who) is {Bot:true} c?c.Name:null;}
  async Task Rate(MessageList list,ChatItem it,bool up){if(BotName(it.Who) is not {} bot)return;var where=rooms.FirstOrDefault(r=>r.List==list) is {} r?"room:"+r.Room:"dm";
   var note="";if(!up){using var d=new FeedbackDialog();if(d.ShowDialog(this)==DialogResult.OK)note=d.Note;}
   if(!await Hub.SendFeedback(bot,up?"up":"down",it.Id,where,0,note)){Toast("Not sent: not connected to the relay right now.",true);return;}
   rated[it.Id]=up?"up":"down";if(rated.Count>1000)foreach(var old in rated.Keys.Take(rated.Count-1000).ToList())rated.Remove(old);SavePrefs();list.Invalidate();
-  Toast(up?"Thanks! Groki learns from your feedback.":"Thanks. Groki will try to do better.",false);}
- // Asked once you've seen a dozen of Groki's messages, while 3DFx is in front; "Not now" asks again in a few days.
- void GrokiSaid(){grokiSeen++;SavePrefs();if(Token!=null&&Hub.FeedbackOn&&GrokiSurvey.Due(grokiSeen,surveyDone,surveyAfter,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))_=SurveySoon();}
+  Toast(up?"Thanks! AM learns from your feedback.":"Thanks. AM will try to do better.",false);}
+ // Asked once you've seen a dozen of AM's messages, while 3DFx is in front; "Not now" asks again in a few days.
+ void AMSaid(){amSeen++;SavePrefs();if(Token!=null&&Hub.FeedbackOn&&AMSurvey.Due(amSeen,surveyDone,surveyAfter,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))_=SurveySoon();}
  async Task SurveySoon(){await Task.Delay(2500);if(ActiveForm==this&&!surveyOpen&&!surveyDone)ShowSurvey(false);}
  void ShowSurvey(bool asked){if(surveyOpen||Token==null)return;surveyOpen=true;
   try{using var d=new SurveyDialog();if(Token=="preview"&&asked)d.Shown+=(_,_)=>d.PreviewPick(4);
    if(d.ShowDialog(this)==DialogResult.OK){_=SendSurvey(d.Rating,d.Comment);surveyDone=true;}
-   else if(!asked)surveyAfter=DateTimeOffset.UtcNow.Add(GrokiSurvey.Wait).ToUnixTimeMilliseconds();SavePrefs();}
+   else if(!asked)surveyAfter=DateTimeOffset.UtcNow.Add(AMSurvey.Wait).ToUnixTimeMilliseconds();SavePrefs();}
   finally{surveyOpen=false;}}
- async Task SendSurvey(int rating,string comment){if(await Hub.SendFeedback("groki","survey","","",rating,comment))Toast("Thanks for telling us! Groki learns from it.",false);else{surveyDone=false;Toast("Not sent: not connected to the relay right now.",true);}}
+ async Task SendSurvey(int rating,string comment){if(await Hub.SendFeedback("alliedmastercomputer","survey","","",rating,comment))Toast("Thanks for telling us! AM learns from it.",false);else{surveyDone=false;Toast("Not sent: not connected to the relay right now.",true);}}
  // Sending. While editing, Enter saves the change instead (an unchanged text just stops editing).
  async Task Send(){var c=Current;var text=composer.Box.Text;if(c==null||string.IsNullOrWhiteSpace(text))return;
   if(c.Editing is {} editing){if(text==editing.Text){CancelCompose();return;}var change=await c.Edit(editing,text);
@@ -434,15 +464,15 @@ public sealed class Shell:Form {
  // Sample content for screenshots only (--preview). No network, nothing saved.
  void Preview(string? arg){var video=arg!=null&&File.Exists(arg)?arg:null;var page=video==null&&arg is "dm" or "friends" or "addfriend" or "profile" or "search" or "reply" or "rate" or "survey" or "feedback" or "appearance" or "windows" or "guest" or "login" or "settings" or "join"?arg:"room";
   Relay=DefaultRelay;Account="Alex";GuestName="Alex";Token="preview";Hub.Preview("Alex");
-  var r=new RoomSession(Relay,"friday-friends","example-password","Alex","preview");Wire(r);r.PreviewState("Alex",["Alex","Sam","Jordan (guest)","Groki (AI)"],"Sam");
+  var r=new RoomSession(Relay,"friday-friends","example-password","Alex","preview");Wire(r);r.PreviewState("Alex",["Alex","Sam","Jordan (guest)","Allied Mastercomputer (AI)"],"Sam");
   var L=r.List;var t=DateTime.Now.AddMinutes(-45);L.BeginUpdate();
   L.Welcome("#friday-friends","Welcome to #friday-friends!","This is the start of your time in #friday-friends. Say hi!");
   L.Notice("Alex joined.",t);L.Notice("Sam joined.",t.AddMinutes(1));L.Say("Sam","Hey! The new look is very modern 👋",t.AddMinutes(2),"p1");L.Say("Sam","dark mode finally",t.AddMinutes(2.3));
   L.Say("Alex","Right? Rooms on the left, members on the right.",t.AddMinutes(3),"p2","p1");L.Notice("Jordan (guest) joined.",t.AddMinutes(9));L.Say("Jordan (guest)","Is that the 3DFx orb up in the corner?",t.AddMinutes(10),"p3",edited:true);
   L.Highlight("Sam sent a nudge!",t.AddMinutes(11));L.Say("Alex","😄 👍",t.AddMinutes(20));L.ShowMedia("Sam","image/jpeg",SamplePhoto(),t.AddMinutes(21),"p6");L.ShowSticker("Jordan (guest)","party",t.AddMinutes(22));
-  L.Say("Alex","@groki pineapple on pizza, yes or no?",t.AddMinutes(30),"p4");L.Say("Groki (AI)","yeah i do, but its too sweet",t.AddMinutes(30.1),"p5","p4");
+  L.Say("Alex","@alliedmastercomputer pineapple on pizza, yes or no?",t.AddMinutes(30),"p4");L.Say("Allied Mastercomputer (AI)","yeah i do, but its too sweet",t.AddMinutes(30.1),"p5","p4");
   L.Say("Sam","@Alex are you bringing snacks tonight?",t.AddMinutes(35),"p7");L.Say("Sam","also the new build is up: https://github.com/iluvgam/communication-device/releases",t.AddMinutes(35.5));L.ShowMedia("Alex","video/mp4",video!=null?File.ReadAllBytes(video):new byte[12_400_000],t.AddMinutes(40),"p9","p7");
-  L.Items[^1].Reactions=[new("🔥",["Sam","Jordan (guest)","Groki (AI)"])];L.Find("p1")!.Reactions=[new("👋",["Alex","Jordan (guest)"]),new("😄",["Groki (AI)"])];L.Find("p5")!.Reactions=[new("😂",["Sam","Alex"])];L.EndUpdate();
+  L.Items[^1].Reactions=[new("🔥",["Sam","Jordan (guest)","Allied Mastercomputer (AI)"])];L.Find("p1")!.Reactions=[new("👋",["Alex","Jordan (guest)"]),new("😄",["Allied Mastercomputer (AI)"])];L.Find("p5")!.Reactions=[new("😂",["Sam","Alex"])];L.EndUpdate();
   r.Draft="yes! bringing chips"+Environment.NewLine+"and that spicy dip 🌶️";rooms.Add(r);
   var g=new RoomSession(Relay,"game-night","example-password","Alex","preview");Wire(g);g.PreviewState("Alex",["Alex","Morgan"]);
   g.List.Welcome("#game-night","Welcome to #game-night!","Say hi!");g.List.Say("Morgan","gg everyone",DateTime.Now.AddMinutes(-3));g.Unread=4;g.Mentions=1;rooms.Add(g);
@@ -475,9 +505,9 @@ public sealed class Shell:Form {
 // App-only choices, kept in client.json beside settings.json (the shared Settings record is left as the relay project knows it).
 // A room to reopen at start; the password is encrypted for this Windows user (RoomVault).
 sealed record SavedRoom(string Relay,string Room,string Secret);
-// Rated: your thumbs up / down on Groki's messages (by message id). GrokiSeen / SurveyDone / SurveyAfter: when to ask about Groki.
+// Rated: your thumbs up / down on AM's messages (by message id). AMSeen / SurveyDone / SurveyAfter: when to ask about AM.
 sealed record ClientPrefs(bool Notifications=true,bool CloseToTray=true,bool? ReopenRooms=null,float TextScale=1f,bool TrayTipShown=false,List<SavedRoom>? Rooms=null,
- Dictionary<string,string>? Rated=null,int GrokiSeen=0,bool SurveyDone=false,long SurveyAfter=0){
+ Dictionary<string,string>? Rated=null,int AMSeen=0,bool SurveyDone=false,long SurveyAfter=0){
  public static string DefaultPath=>Path.Combine(Path.GetDirectoryName(Settings.DefaultPath)!,"client.json");
  public static ClientPrefs Load(){try{return System.Text.Json.JsonSerializer.Deserialize<ClientPrefs>(File.ReadAllText(DefaultPath))??new();}catch(Exception e) when(e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException){return new();}}
  public void Save(){Directory.CreateDirectory(Path.GetDirectoryName(DefaultPath)!);File.WriteAllText(DefaultPath,System.Text.Json.JsonSerializer.Serialize(this));}

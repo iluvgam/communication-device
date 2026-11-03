@@ -20,9 +20,10 @@ static class DirectHistory {
  // Tests point this at a scratch folder.
  internal static string Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"3DFx","History");
  static string File(string relay,string me,string other)=>Path.Combine(Root,RelayClient.ValidateUrl(relay).Host,me.ToLowerInvariant(),other.ToLowerInvariant()+".dat");
- public static List<DmEntry> Load(string relay,string me,string other){var list=new List<DmEntry>();
+ // Each message once, by id: several copies of 3DFx (or a DM arriving twice) could write the same one more than once.
+ public static List<DmEntry> Load(string relay,string me,string other){var list=new List<DmEntry>();var ids=new HashSet<string>();
   try{foreach(var line in System.IO.File.ReadLines(File(relay,me,other))){
-    try{if(JsonSerializer.Deserialize<DmEntry>(ProtectedData.Unprotect(Convert.FromBase64String(line),purpose,DataProtectionScope.CurrentUser)) is {} e)list.Add(e);}
+    try{if(JsonSerializer.Deserialize<DmEntry>(ProtectedData.Unprotect(Convert.FromBase64String(line),purpose,DataProtectionScope.CurrentUser)) is {} e&&ids.Add(e.Id))list.Add(e);}
     catch(Exception x) when(x is FormatException or CryptographicException or JsonException){}}}
   catch(Exception x) when(x is IOException or UnauthorizedAccessException){}
   return list;}
@@ -60,6 +61,7 @@ sealed class Messenger(Form owner,Func<bool> soundOn) {
  readonly Dictionary<string,int> unread=new(StringComparer.OrdinalIgnoreCase);
  readonly Dictionary<string,HashSet<string>> seen=new(StringComparer.OrdinalIgnoreCase);
  readonly Dictionary<string,string> outbox=[];
+ DateTime lastAlert;  // one sound and taskbar flash for a burst of messages, not one each
  readonly Dictionary<string,(Packet Head,MemoryStream Data)> arriving=[];
  readonly Dictionary<string,List<DmEntry>> previewHistory=new(StringComparer.OrdinalIgnoreCase);
  // Your own profile as the relay last confirmed it, and contacts' pictures by picture id (fetched once, kept in memory).
@@ -73,14 +75,22 @@ sealed class Messenger(Form owner,Func<bool> soundOn) {
  public void Start(string relayUrl,string me,string signIn){Stop();relay=relayUrl;Me=me;token=signIn;run=new();_=Loop(run.Token);}
  public void Stop(){run?.Cancel();run=null;var c=client;client=null;if(c!=null)_=c.Close();Online=false;Contacts=[];unread.Clear();seen.Clear();arriving.Clear();outbox.Clear();Changed?.Invoke();}
 
- async Task Loop(CancellationToken stop){int delay=3;
-  while(!stop.IsCancellationRequested){var c=new DirectClient();
-   try{await c.Connect(Endpoint??DirectClient.UrlFor(relay),token);if(stop.IsCancellationRequested)break;client=c;Online=true;delay=3;Changed?.Invoke();
+ // Waits between reconnect tries: quick at first (a blip is over in a second), then less often, at most 30 s apart.
+ internal static int RetryDelay(int attempt)=>Math.Min(30,1<<Math.Min(attempt,5));
+ // The network coming back cuts the wait short.
+ CancellationTokenSource? retryWait;
+ async Task Loop(CancellationToken stop){int attempt=0;
+  System.Net.NetworkInformation.NetworkAvailabilityChangedEventHandler back=(_,e)=>{if(e.IsAvailable)retryWait?.Cancel();};
+  System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged+=back;
+  try{while(!stop.IsCancellationRequested){var c=new DirectClient();
+   try{await c.Connect(Endpoint??DirectClient.UrlFor(relay),token);if(stop.IsCancellationRequested)break;client=c;Online=true;attempt=0;Changed?.Invoke();
     while(await c.Read() is {} p){if(stop.IsCancellationRequested)break;Handle(c,p);}}
    catch(IOException e) when(IsSignOut(e.Message)){if(!stop.IsCancellationRequested)SignedOut?.Invoke(e.Message);return;}
    catch(Exception e) when(e is IOException or WebSocketException or OperationCanceledException or ObjectDisposedException or JsonException){}
    finally{if(client==c)client=null;c.Dispose();if(!stop.IsCancellationRequested){Online=false;Changed?.Invoke();}}
-   try{await Task.Delay(TimeSpan.FromSeconds(delay),stop);}catch(OperationCanceledException){return;}delay=Math.Min(60,delay*2);}}
+   using(retryWait=CancellationTokenSource.CreateLinkedTokenSource(stop))
+    try{await Task.Delay(TimeSpan.FromSeconds(RetryDelay(attempt++)),retryWait.Token);}catch(OperationCanceledException){if(stop.IsCancellationRequested)return;}}}
+  finally{System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged-=back;}}
  static bool IsSignOut(string text)=>text.Contains("Sign in again")||text.Contains("account was deleted");
 
  void Handle(DirectClient c,Packet p){
@@ -115,7 +125,8 @@ sealed class Messenger(Form owner,Func<bool> soundOn) {
    try{DirectHistory.Append(relay,Me,other,e);}catch(Exception x) when(x is IOException or UnauthorizedAccessException or CryptographicException){Notice?.Invoke("Could not save a DM on this PC; it will arrive again later.",true);return;}
    Seen(other).Add(e.Id);
    Message?.Invoke(other,e);
-   if(!e.Out&&!e.IsChange&&!IsViewing(other)){unread[other]=Unread(other)+1;Changed?.Invoke();Aero.Flash(owner);if(soundOn())SystemSounds.Asterisk.Play();}}
+   if(!e.Out&&!e.IsChange&&!IsViewing(other)){unread[other]=Unread(other)+1;Changed?.Invoke();
+    if(DateTime.UtcNow-lastAlert>TimeSpan.FromSeconds(3)){lastAlert=DateTime.UtcNow;Aero.Flash(owner);if(soundOn())SystemSounds.Asterisk.Play();}}}
   _=c.Ack(e.Id).ContinueWith(t=>_=t.Exception,TaskContinuationOptions.OnlyOnFaulted);}
  HashSet<string> Seen(string other){if(!seen.TryGetValue(other,out var ids))seen[other]=ids=History(other).Select(x=>x.Id).ToHashSet();return ids;}
  public List<DmEntry> History(string other)=>preview?previewHistory.GetValueOrDefault(other)??[]:DirectHistory.Load(relay,Me,other);
@@ -144,7 +155,7 @@ sealed class Messenger(Form owner,Func<bool> soundOn) {
 
  // --preview: sample friends and one sample conversation, all in memory.
  public void Preview(string me){preview=true;Me=me;Online=true;
-  Contacts=[new("Jordan","contact",false,"offline"),new("Riley","incoming",false),new("Sam","contact",true,"online","Counting down to Friday 🎉","sam"),new("Morgan","contact",true,"busy","In a meeting until 3","morgan"),new("Casey","outgoing",false),new("groki","contact",true,"online","bored af, someone talk to me",Bot:true)];unread["Jordan"]=1;
+  Contacts=[new("Jordan","contact",false,"offline"),new("Riley","incoming",false),new("Sam","contact",true,"online","Counting down to Friday 🎉","sam"),new("Morgan","contact",true,"busy","In a meeting until 3","morgan"),new("Casey","outgoing",false),new("alliedmastercomputer","contact",true,"online","chillin",Bot:true)];unread["Jordan"]=1;
   MyMood="Building 3DFx 1.0";myAvatar="alex";avatars["alex"]=SamplePicture(0x2B86D7,0x9FD8FF);avatars["sam"]=SamplePicture(0xD35400,0xFFD28A);avatars["morgan"]=SamplePicture(0x2E7D32,0xB9F0A0);
   long t=DateTimeOffset.UtcNow.AddMinutes(-6).ToUnixTimeMilliseconds();
   previewTyping=true;previewHistory["Sam"]=[new("a1",false,"text","Are you coming to friday-friends tonight?",t),new("a2",true,"text","Yes! Around 8.",t+60_000,Reply:"a1"),new("a3",false,"sticker","party",t+120_000),new("a4",true,"text","See you there 👋",t+180_000),new("a5",false,"react","❤️",t+200_000,Reply:"a4")];

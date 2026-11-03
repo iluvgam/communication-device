@@ -58,7 +58,7 @@ sealed class RoomSession(string relay,string room,string password,string who,str
  public override string Key=>"room:"+Room;
  public override string Title=>Room;
  public bool HasBots=>Features.Contains("bots");
- public override string Placeholder=>!Connected?"You're disconnected. Click Rejoin to send messages.":HasBots?$"Message #{Room}   (type @groki to bring in Groki, our AI)":$"Message #{Room}";
+ public override string Placeholder=>!Connected?"You're disconnected. Click Rejoin to send messages.":HasBots?$"Message #{Room}   (type @alliedmastercomputer to bring in AM, our AI)":$"Message #{Room}";
  public override bool CanSend=>Connected;
  public override bool CanPictures=>Connected&&Features.Contains("media")&&!sendingMedia;
  public override bool CanVideos=>CanPictures;

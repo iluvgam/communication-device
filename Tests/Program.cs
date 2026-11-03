@@ -219,33 +219,34 @@ await Test("Held changes reach new apps; older apps get only messages",async()=>
  Expect(oldGot.Any(p=>p.Kind=="dm"&&p.Id==m)&&!oldGot.Any(p=>p.Kind=="dm"&&p.Type=="edit"),"Old app got "+string.Join(",",oldGot.Where(p=>p.Kind=="dm").Select(p=>p.Type)));old.Abort();
  var m2=await a.SendText(ub,"again");var ed2=await a.SendChange(ub,"edit",m2,"again!");var fresh=await Device(tb);var e=await DmNext(fresh,p=>p.Kind=="dm"&&p.Id==ed2);Expect(e.Type=="edit"&&e.Text=="again!","Fresh "+e);a.Dispose();fresh.Dispose();});
 
-// --- Groki, the AI member (0.11 relay, started with a BotKey) ---
+// --- AM, the AI member (0.11 relay, started with a BotKey) ---
 const string botKey="test-bot-key-0123456789";
-async Task<(DirectClient C,string Token)> GrokiOnline(){var r=await acct.BotSignIn("groki",botKey);var c=new DirectClient();await c.Connect(dmUrl,r.Token);return (c,r.Token);}
+async Task<(DirectClient C,string Token)> AmOnline(){var r=await acct.BotSignIn("alliedmastercomputer",botKey);var c=new DirectClient();await c.Connect(dmUrl,r.Token);return (c,r.Token);}
 async Task<ClientWebSocket> Summoned(string room,string token,string pass){var s=await Open();await Protocol.Write(s,new Packet("summoned",Room:room,Token:token,Data:pass),deadline.Token);return s;}
 await Test("Relay announces bots",async()=>{using var s=await Connect(new Packet("create",U("bot-feat"),secret,"Feat"));var r=await Read(s);Expect(r.Text.Split(' ').Contains("bots"),"Ready text: "+r.Text);});
+await Test("Groki, his old name, stays reserved too",async()=>{var e=await Fails(()=>acct.SignUp("groki",pw1));Expect(e.Status==409,"Status "+e.Status);});
 await Test("Bryan, his old name, stays reserved",async()=>{var e=await Fails(()=>acct.SignUp("bryan",pw1));Expect(e.Status==409,"Status "+e.Status);});
-await Test("Nobody can sign up as Groki",async()=>{var e=await Fails(()=>acct.SignUp("Groki",pw1));Expect(e.Status==409,"Status "+e.Status);});
-await Test("Groki's sign-in needs the bot key, and only works for bot names",async()=>{var e1=await Fails(()=>acct.BotSignIn("groki","wrong key wrong key"));var e2=await Fails(()=>acct.BotSignIn(U("someone"),botKey));
- Expect(e1.Status==401&&e2.Status==401,$"{e1.Status} {e2.Status}");var a=await acct.BotSignIn("groki",botKey);var b=await acct.BotSignIn("groki",botKey);Expect(a.Username=="groki"&&b.Username=="groki"&&a.Token!=b.Token,"Sign-ins "+a+" "+b);
- var e3=await Fails(()=>acct.SignIn("groki","any password at all"));Expect(e3.Status==401,"Password sign-in worked for Groki");});
-await Test("@groki while Groki is offline tells only the caller",async()=>{var room=U("off-room");using var o=await Enter("create",room,"Owner");await Protocol.Write(o,new Packet("send",Text:"hey @groki you there"),deadline.Token);
- var note=await ReadUntil(o,p=>p.Name=="Room"&&p.Text.Contains("online"));Expect(note.Text=="Groki (AI) isn't online right now.","Got "+note.Text);});
-await Test("@groki summons him: one-time pass, no room password, shown as Groki (AI)",async()=>{var (bot,bt)=await GrokiOnline();var room=U("summon-room");using var o=await Enter("create",room,"Owner");
- await Protocol.Write(o,new Packet("send",Text:"yo @Groki what do you think"),deadline.Token);var call=await DmNext(bot,p=>p.Kind=="summon");
- Expect(call.Room==room&&call.Text=="yo @Groki what do you think"&&call.Name==G("Owner")&&call.Token.Length==32,"Summon "+call);
+await Test("Nobody can sign up as AM",async()=>{var e=await Fails(()=>acct.SignUp("AlliedMastercomputer",pw1));Expect(e.Status==409,"Status "+e.Status);});
+await Test("AM's sign-in needs the bot key, and only works for bot names",async()=>{var e1=await Fails(()=>acct.BotSignIn("alliedmastercomputer","wrong key wrong key"));var e2=await Fails(()=>acct.BotSignIn(U("someone"),botKey));
+ Expect(e1.Status==401&&e2.Status==401,$"{e1.Status} {e2.Status}");var a=await acct.BotSignIn("alliedmastercomputer",botKey);var b=await acct.BotSignIn("alliedmastercomputer",botKey);Expect(a.Username=="alliedmastercomputer"&&b.Username=="alliedmastercomputer"&&a.Token!=b.Token,"Sign-ins "+a+" "+b);
+ var e3=await Fails(()=>acct.SignIn("alliedmastercomputer","any password at all"));Expect(e3.Status==401,"Password sign-in worked for AM");});
+await Test("@alliedmastercomputer while AM is offline tells only the caller",async()=>{var room=U("off-room");using var o=await Enter("create",room,"Owner");await Protocol.Write(o,new Packet("send",Text:"hey @alliedmastercomputer you there"),deadline.Token);
+ var note=await ReadUntil(o,p=>p.Name=="Room"&&p.Text.Contains("online"));Expect(note.Text=="Allied Mastercomputer (AI) isn't online right now.","Got "+note.Text);});
+await Test("@alliedmastercomputer summons him: one-time pass, no room password, shown as Allied Mastercomputer (AI)",async()=>{var (bot,bt)=await AmOnline();var room=U("summon-room");using var o=await Enter("create",room,"Owner");
+ await Protocol.Write(o,new Packet("send",Text:"yo @AlliedMastercomputer what do you think"),deadline.Token);var call=await DmNext(bot,p=>p.Kind=="summon");
+ Expect(call.Room==room&&call.Text=="yo @AlliedMastercomputer what do you think"&&call.Name==G("Owner")&&call.Token.Length==32,"Summon "+call);
  using var s=await Summoned(room,bt,call.Token);var r=await Read(s);Expect(r.Kind=="ready","Bot not admitted: "+r.Text);
- await ReadUntil(o,p=>p.Text=="Groki (AI) joined.");await Protocol.Write(s,new Packet("send",Text:"hey whats up"),deadline.Token);var m=await ReadUntil(o,p=>p.Text=="hey whats up");Expect(m.Name=="Groki (AI)","Name "+m.Name);
- await Protocol.Write(s,new Packet("typing"),deadline.Token);var t=await ReadUntil(o,p=>p.Kind=="typing");Expect(t.Name=="Groki (AI)","Typing from "+t.Name);
- await Protocol.Write(o,new Packet("send",Text:"@groki again"),deadline.Token);Expect(await DmTry(bot,p=>p.Kind=="summon",1)==null,"Summoned while already in the room");
+ await ReadUntil(o,p=>p.Text=="Allied Mastercomputer (AI) joined.");await Protocol.Write(s,new Packet("send",Text:"hey whats up"),deadline.Token);var m=await ReadUntil(o,p=>p.Text=="hey whats up");Expect(m.Name=="Allied Mastercomputer (AI)","Name "+m.Name);
+ await Protocol.Write(s,new Packet("typing"),deadline.Token);var t=await ReadUntil(o,p=>p.Kind=="typing");Expect(t.Name=="Allied Mastercomputer (AI)","Typing from "+t.Name);
+ await Protocol.Write(o,new Packet("send",Text:"@alliedmastercomputer again"),deadline.Token);Expect(await DmTry(bot,p=>p.Kind=="summon",1)==null,"Summoned while already in the room");
  using var reuse=await Summoned(room,bt,call.Token);var again=await Read(reuse);Expect(again.Kind=="error","A pass worked twice");bot.Dispose();});
-await Test("A pass only works for its room, and only for Groki",async()=>{var (bot,bt)=await GrokiOnline();var room=U("pass-room");var other=U("other-room");using var o=await Enter("create",room,"Owner");using var o2=await Enter("create",other,"Owner2");
- await Protocol.Write(o,new Packet("send",Text:"@groki"),deadline.Token);var call=await DmNext(bot,p=>p.Kind=="summon");
+await Test("A pass only works for its room, and only for AM",async()=>{var (bot,bt)=await AmOnline();var room=U("pass-room");var other=U("other-room");using var o=await Enter("create",room,"Owner");using var o2=await Enter("create",other,"Owner2");
+ await Protocol.Write(o,new Packet("send",Text:"@alliedmastercomputer"),deadline.Token);var call=await DmNext(bot,p=>p.Kind=="summon");
  using(var wrongRoom=await Summoned(other,bt,call.Token)){Expect((await Read(wrongRoom)).Kind=="error","Pass worked in another room");}
- await Task.Delay(10500);await Protocol.Write(o,new Packet("send",Text:"@groki"),deadline.Token);var call2=await DmNext(bot,p=>p.Kind=="summon");var human=(await acct.SignUp(U("mallory"),pw1)).Token;
- using(var impostor=await Summoned(room,human,call2.Token)){Expect((await Read(impostor)).Kind=="error","A normal account used Groki's pass");}bot.Dispose();});
-await Test("Groki is marked as AI in contact lists",async()=>{var (bot,_)=await GrokiOnline();var (a,ua,_)=await Online("amy");await a.Contact("add","groki");await ContactsUntil(bot,l=>l.Any(x=>x.Name==ua&&x.State=="incoming"));
- await bot.Contact("accept",ua);var l=await ContactsUntil(a,l=>l.Any(x=>x.Name=="groki"&&x.State=="contact"));Expect(l.Single(x=>x.Name=="groki").Bot&&!l.Single(x=>x.Name=="groki").Name.Contains("AI"),"Not marked");a.Dispose();bot.Dispose();});
+ await Task.Delay(10500);await Protocol.Write(o,new Packet("send",Text:"@alliedmastercomputer"),deadline.Token);var call2=await DmNext(bot,p=>p.Kind=="summon");var human=(await acct.SignUp(U("mallory"),pw1)).Token;
+ using(var impostor=await Summoned(room,human,call2.Token)){Expect((await Read(impostor)).Kind=="error","A normal account used AM's pass");}bot.Dispose();});
+await Test("AM is marked as AI in contact lists",async()=>{var (bot,_)=await AmOnline();var (a,ua,_)=await Online("amy");await a.Contact("add","alliedmastercomputer");await ContactsUntil(bot,l=>l.Any(x=>x.Name==ua&&x.State=="incoming"));
+ await bot.Contact("accept",ua);var l=await ContactsUntil(a,l=>l.Any(x=>x.Name=="alliedmastercomputer"&&x.State=="contact"));Expect(l.Single(x=>x.Name=="alliedmastercomputer").Bot&&!l.Single(x=>x.Name=="alliedmastercomputer").Name.Contains("AI"),"Not marked");a.Dispose();bot.Dispose();});
 
 // --- Replies, edits, deletes, reactions and room history (0.14 relay) ---
 async Task<Packet> Said(ClientWebSocket s,string text)=>await ReadUntil(s,p=>p.Kind=="message"&&p.Text==text);
@@ -305,18 +306,18 @@ await Test("History keeps the last 100 messages",async()=>{var room=U("long-room
 await Test("Reaction helpers",()=>{Expect(Reaction.Valid("👍")&&Reaction.Valid("❤️")&&Reaction.Valid("🇳🇴")&&!Reaction.Valid("")&&!Reaction.Valid("lol")&&!Reaction.Valid("👍 ")&&!Reaction.Valid(string.Concat(Enumerable.Repeat("😀",9))),"Valid");
  var list=new List<Reaction>{new("👍",[new string('é',32),"Sam"])};Expect(Reaction.Parse(Reaction.Format(list))[0].N[0]==new string('é',32)&&Reaction.Parse("not json").Count==0,"Round trip");return Task.CompletedTask;});
 
-// --- Feedback on Groki (0.15 relay): thumbs up / down and the experience survey ---
-await Test("Feedback reaches Groki, is held while he's offline, and isn't echoed",async()=>{var (bot,bt)=await GrokiOnline();var (a,ua,ta)=await Online("fay");Expect(a.Features.Contains("feedback"),"Ready: "+string.Join(' ',a.Features));
- var a2=await Device(ta);var target=Media.NewId();var id=await a.SendFeedback("groki","up",target,"dm");
+// --- Feedback on AM (0.15 relay): thumbs up / down and the experience survey ---
+await Test("Feedback reaches AM, is held while he's offline, and isn't echoed",async()=>{var (bot,bt)=await AmOnline();var (a,ua,ta)=await Online("fay");Expect(a.Features.Contains("feedback"),"Ready: "+string.Join(' ',a.Features));
+ var a2=await Device(ta);var target=Media.NewId();var id=await a.SendFeedback("alliedmastercomputer","up",target,"dm");
  var f=await DmNext(bot,p=>p.Kind=="feedback"&&p.Id==id);Expect(f.Name==ua&&f.Type=="up"&&f.Reply==target&&f.Room=="dm"&&f.Time>0,"Got "+f);
  await DmNext(a,p=>p.Kind=="dm-sent"&&p.Id==id);Expect(await DmTry(a2,p=>p.Id==id,1)==null,"Echoed to the sender's other device");
  await bot.Ack(id);await Task.Delay(300);bot.Dispose();await Task.Delay(300);
- var s=await a.SendFeedback("groki","survey","","",4,"pretty good");var d=await a.SendFeedback("groki","down",Media.NewId(),"room:pizza-room",0,"Rude or mean");
+ var s=await a.SendFeedback("alliedmastercomputer","survey","","",4,"pretty good");var d=await a.SendFeedback("alliedmastercomputer","down",Media.NewId(),"room:pizza-room",0,"Rude or mean");
  await DmNext(a,p=>p.Kind=="dm-sent"&&p.Id==d);var back=await Device(bt);var got=new List<Packet>{await DmNext(back,p=>p.Kind=="feedback"),await DmNext(back,p=>p.Kind=="feedback")};
  Expect(got.Any(p=>p.Id==s&&p.Type=="survey"&&p.Seq==4&&p.Text=="pretty good"&&p.Name==ua)&&got.Any(p=>p.Id==d&&p.Type=="down"&&p.Room=="room:pizza-room"&&p.Text=="Rude or mean"),"Held: "+string.Join(" | ",got));
  Expect(!got.Any(p=>p.Id==id),"A confirmed vote came back");a.Dispose();a2.Dispose();back.Dispose();});
-await Test("Feedback is only for AI members, and must be well formed",async()=>{var (bot,_)=await GrokiOnline();var (a,ua,_)=await Online("gus");var (b,ub,_)=await Online("hal");await Befriend(a,ua,b,ub);
- foreach(var (to,type,target,rating,text) in new[]{(ub,"up",Media.NewId(),0,""),("groki","meh",Media.NewId(),0,""),("groki","up","",0,""),("groki","up","not-an-id",0,""),("groki","survey","",0,""),("groki","survey","",6,""),("groki","down",Media.NewId(),0,new string('x',501)),("nobody-here","up",Media.NewId(),0,"")}){
+await Test("Feedback is only for AI members, and must be well formed",async()=>{var (bot,_)=await AmOnline();var (a,ua,_)=await Online("gus");var (b,ub,_)=await Online("hal");await Befriend(a,ua,b,ub);
+ foreach(var (to,type,target,rating,text) in new[]{(ub,"up",Media.NewId(),0,""),("alliedmastercomputer","meh",Media.NewId(),0,""),("alliedmastercomputer","up","",0,""),("alliedmastercomputer","up","not-an-id",0,""),("alliedmastercomputer","survey","",0,""),("alliedmastercomputer","survey","",6,""),("alliedmastercomputer","down",Media.NewId(),0,new string('x',501)),("nobody-here","up",Media.NewId(),0,"")}){
   var id=await a.SendFeedback(to,type,target,"dm",rating,text);var r=await DmNext(a,p=>p.Id==id&&p.Kind is "error" or "dm-sent");Expect(r.Kind=="error",$"{to} {type} {rating} accepted");}
  Expect(await DmTry(b,p=>p.Kind=="feedback",1)==null,"A person got feedback");a.Dispose();b.Dispose();bot.Dispose();});
 await Test("Feedback helpers",()=>{Expect(FriendsChat.Feedback.Valid(new Packet("feedback",Type:"up",Reply:Media.NewId()))&&FriendsChat.Feedback.Valid(new Packet("feedback",Type:"survey",Seq:5,Text:"line one\nline two"))&&!FriendsChat.Feedback.Valid(new Packet("feedback",Type:"survey",Seq:3,Reply:Media.NewId()))&&!FriendsChat.Feedback.Valid(new Packet("feedback",Type:"down",Reply:Media.NewId(),Text:"bad\u0007")),"Valid");return Task.CompletedTask;});

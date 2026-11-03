@@ -40,7 +40,7 @@ static class Avatars {
  public static Color PresenceName(string presence)=>presence is "online" or "away" or "busy"?Aero.OnlineName:Aero.Offline;
 }
 
-// Small tag after a name: "AI" for an AI member (Groki), so nobody mistakes him for a person, and "GUEST" for people without an account.
+// Small tag after a name: "AI" for an AI member (AM), so nobody mistakes him for a person, and "GUEST" for people without an account.
 static class Badge {
  public static int Draw(Graphics g,string tag,int x,int centerY,Control scale){if(tag.Length==0)return 0;int S(int px)=>scale.LogicalToDeviceUnits(px);
   var size=TextRenderer.MeasureText(tag,Aero.Caps);var r=new RectangleF(x,centerY-S(8),size.Width+S(4),S(16));
@@ -87,12 +87,12 @@ sealed class ProfileCard:ToolStripDropDown {
   Items.Add(new ToolStripControlHost(page){Margin=Padding.Empty,Padding=Padding.Empty,AutoSize=false,Size=page.Size});}
 }
 
-// Groki's logo, modern: a black hole drawn with a few bold, clean shapes. A near-black rounded square, a soft violet bloom,
+// AM's logo, modern: a black hole drawn with a few bold, clean shapes. A near-black rounded square, a soft violet bloom,
 // a thick ring of light around the hole that sweeps through violet, magenta, pink and amber (brightest on the left, the
 // side of the disk that comes towards you), a slim tilted disk passing in front, and the pure black hole in the middle.
 // No stars, no gloss. Drawn in code so it stays sharp at any size; cached per size.
 // Full-bleed (no rounded corners) when it's used as his picture, because pictures get their own corners.
-static class GrokiLogo {
+static class AMLogo {
  static readonly Dictionary<(int,bool),Bitmap> cache=[];
  public static Bitmap Draw(int size,bool rounded=true){if(!cache.TryGetValue((size,rounded),out var bmp))cache[(size,rounded)]=bmp=Render(size,rounded);return bmp;}
  public static Bitmap Picture=>Draw(192,false);

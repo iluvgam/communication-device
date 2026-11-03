@@ -113,14 +113,14 @@ sealed class SettingsDialog:Form {
   Switch("Show \"Seen\" in direct messages","Friends see when you've read their DMs, and you see when they've read yours. Turn it off to do neither.",shell.Receipts,v=>{shell.Receipts=v;shell.SaveSettings();});
   Caps("What the relay can see",8);Para("The relay can read messages, pictures and videos in rooms. Nothing is saved unless you click Save on a picture or video.");
   Caps("Direct messages");Para("DMs wait on the relay until they're delivered (up to 30 days). After that they live only on this PC, encrypted for your Windows account. Right-click a conversation to clear it from this PC.");
-  Caps("Groki");Para("Groki is an AI, always marked AI. He only joins a room when someone types @groki, and remembers things per room.");}
+  Caps("AM");Para("AM is an AI, always marked AI. His account is alliedmastercomputer. He only joins a room when someone types @alliedmastercomputer, and remembers each chat separately.");}
  void Connection(){Title("Connection");Caps("Relay address",4);var relay=Input();relay.Box.Text=shell.Relay;relay.Box.ReadOnly=true;
   Para(shell.Token!=null?"Your account lives on this relay. To use another relay, log out first.":"To use another relay, log in again from the start screen.");
   Divider();Switch("Remember me on this PC","Keeps the relay address and your guest name for next time. Passwords are never saved. Turning this off also forgets \"Keep me signed in\".",shell.Remember,v=>{shell.Remember=v;shell.SaveSettings();});}
  void About(){Title("About");var card=new Panel{Size=new Size(W,S(120)),BackColor=Aero.Bg};
   card.Paint+=(_,e)=>{var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;Aero.Orb(g,new RectangleF(0,S(8),S(96),S(96)));
    TextRenderer.DrawText(g,Shell.AppTitle,Aero.Title,new Point(S(116),S(24)),Aero.Bright,TextFormatFlags.NoPrefix);
-   TextRenderer.DrawText(g,"Group chat for you and your friends: rooms, DMs, pictures, videos, stickers, and Groki the AI.",Aero.Body,new Rectangle(S(118),S(62),W-S(120),S(44)),Aero.Muted,TextFormatFlags.WordBreak|TextFormatFlags.NoPrefix);};
+   TextRenderer.DrawText(g,"Group chat for you and your friends: rooms, DMs, pictures, videos, stickers, and AM the AI.",Aero.Body,new Rectangle(S(118),S(62),W-S(120),S(44)),Aero.Muted,TextFormatFlags.WordBreak|TextFormatFlags.NoPrefix);};
   Add(card);var status=Status();
   Button("Check for updates",ButtonKind.Primary,async()=>{Say(status,"Checking…",true);Say(status,await shell.CheckForUpdates(),true);});
   Caps("Updates",28);Para($"Installed copies update from GitHub Releases ({Updates.Repository}). Nothing downloads unless you say yes.");}

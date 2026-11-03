@@ -1,5 +1,5 @@
-3DFx Vista 0.15.0 / relay 0.16 — local loopback tests, 2026-11-02
-Relay: 112 of 112 passed. App checks: 83 of 83. Room checks: 36 of 36.
+3DFx Vista 0.16.0 / relay 0.17 — local loopback tests, 2026-11-02
+Relay: 113 of 113 passed. App checks: 95 of 95. Room checks: 36 of 36.
 
 PASS: Create password-protected room
 PASS: Duplicate room rejected
@@ -75,13 +75,14 @@ PASS: DM replies, edits, deletes and reactions reach the other side and your oth
 PASS: Bad DM changes are refused
 PASS: Held changes reach new apps; older apps get only messages
 PASS: Relay announces bots
+PASS: Groki, his old name, stays reserved too
 PASS: Bryan, his old name, stays reserved
-PASS: Nobody can sign up as Groki
-PASS: Groki's sign-in needs the bot key, and only works for bot names
-PASS: @groki while Groki is offline tells only the caller
-PASS: @groki summons him: one-time pass, no room password, shown as Groki (AI)
-PASS: A pass only works for its room, and only for Groki
-PASS: Groki is marked as AI in contact lists
+PASS: Nobody can sign up as AM
+PASS: AM's sign-in needs the bot key, and only works for bot names
+PASS: @alliedmastercomputer while AM is offline tells only the caller
+PASS: @alliedmastercomputer summons him: one-time pass, no room password, shown as Allied Mastercomputer (AI)
+PASS: A pass only works for its room, and only for AM
+PASS: AM is marked as AI in contact lists
 PASS: Relay announces replies, edits, reactions and history
 PASS: Messages carry an id and time; a reply keeps the id it answers
 PASS: Late joiners get the room's recent history, then the join notice
@@ -93,7 +94,7 @@ PASS: A guest who reconnects can't edit old messages; a signed-in person can
 PASS: Pictures can be reacted to and deleted, but aren't replayed
 PASS: History keeps the last 100 messages
 PASS: Reaction helpers
-PASS: Feedback reaches Groki, is held while he's offline, and isn't echoed
+PASS: Feedback reaches AM, is held while he's offline, and isn't echoed
 PASS: Feedback is only for AI members, and must be well formed
 PASS: Feedback helpers
 PASS: Relay names the bad room field

@@ -84,7 +84,7 @@ sealed class FriendsView:Control {
   for(int i=0;i<shown.Count;i++){var c=shown[i];var r=Row(i);if(r.Bottom<ListTop-S(8)||r.Top>Height)continue;bool hot=i==hover;var back=hot?Aero.SideHover:BackColor;
    if(hot){using var path=Aero.Round(r,S(8));using var b=new SolidBrush(back);g.FillPath(b,path);}
    else if(i==0||hover!=i-1)using(var p=new Pen(Aero.Line))g.DrawLine(p,r.X+S(10),r.Y,r.Right-S(10),r.Y);
-   int pic=S(32);Avatars.DrawWithPresence(g,new RectangleF(r.X+S(10),r.Y+(r.Height-pic)/2f,pic,pic),c.Name,c.Bot?GrokiLogo.Picture:hub.Avatar(c.Name),c.State=="contact"?(c.Online?c.Presence:"offline"):null,back);
+   int pic=S(32);Avatars.DrawWithPresence(g,new RectangleF(r.X+S(10),r.Y+(r.Height-pic)/2f,pic,pic),c.Name,c.Bot?AMLogo.Picture:hub.Avatar(c.Name),c.State=="contact"?(c.Online?c.Presence:"offline"):null,back);
    int x=r.X+S(54);var nameW=TextRenderer.MeasureText(c.Name,Aero.Bold,Size.Empty,TextFormatFlags.NoPrefix).Width;TextRenderer.DrawText(g,c.Name,Aero.Bold,new Rectangle(x,r.Y+S(10),nameW,S(22)),c.State=="contact"?Avatars.PresenceName(c.Online?c.Presence:"offline"):Aero.Bright,one);
    if(c.Bot)Badge.Draw(g,"AI",x+nameW+S(4),r.Y+S(21),this);
    var sub=c.State switch{"incoming"=>"Incoming friend request","outgoing"=>"Outgoing friend request","blocked"=>"Blocked",_=>c.Mood.Length>0?c.Mood:c.Online?Profiles.Label(c.Presence):"Offline"};
